@@ -1,0 +1,28 @@
+TechNova AI
+
+TechNova AI is a fictional software company founded in 2021.
+The company develops artificial intelligence and cloud computing solutions.
+
+Products:
+1. NovaAssist - an AI-powered customer support platform.
+2. NovaSearch - a semantic enterprise search system.
+3. NovaVision - a computer vision API.
+
+Office:
+TechNova AI headquarters is located in Austin, Texas.
+
+Customer Support:
+Customer support is available Monday through Friday from 9:00 AM to 6:00 PM Central Time.
+Premium customers receive 24/7 support.
+
+Refund Policy:
+Customers can request a refund within 30 days of purchase.
+Refund requests must include the customer's order number.
+
+Security:
+TechNova AI encrypts customer data both in transit and at rest.
+Customer passwords are hashed and are never stored as plain text.
+
+Technology:
+TechNova AI uses Python, FastAPI, PostgreSQL, Docker, Kubernetes, and cloud infrastructure.
+The AI platform uses vector search and large language models for semantic search and question answering.
