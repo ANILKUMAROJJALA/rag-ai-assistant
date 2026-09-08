@@ -217,7 +217,7 @@ def format_context(documents):
 def generate_node(state: RAGState):
     """Generate a grounded RAG answer."""
 
-    top_documents = state["reranked_documents"][:1]
+    top_documents = state["reranked_documents"][:2]
 
     context = format_context(top_documents)
 
@@ -230,13 +230,21 @@ def generate_node(state: RAGState):
 
     response = llm.invoke(prompt)
 
-    sources = [
-        {
-            "source": document.metadata.get("source"),
-            "chunk_id": document.metadata.get("chunk_id"),
+    sources = []
+
+    for document in top_documents:
+        metadata = document.metadata
+
+        source_info = {
+            "source": metadata.get("source"),
+            "file_type": metadata.get("file_type"),
+            "chunk_id": metadata.get("chunk_id"),
         }
-        for document in top_documents
-    ]
+
+        if metadata.get("page_label") is not None:
+            source_info["page"] = metadata.get("page_label")
+
+        sources.append(source_info)
 
     updated_history = state["conversation_history"].copy()
 
@@ -353,7 +361,7 @@ if __name__ == "__main__":
     }
 
     follow_up_input = {
-    "question": "What technologies do they use?",
+    "question": "What is TechNova AI's refund policy?",
     "standalone_question": "",
 }
 

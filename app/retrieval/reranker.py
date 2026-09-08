@@ -27,22 +27,3 @@ def rerank_documents(query, documents, reranker):
     )
 
     return ranked_documents
-
-
-if __name__ == "__main__":
-    reranker = create_reranker()
-
-    query = "What technologies does TechNova AI use?"
-
-    documents = [
-        "TechNova AI is a fictional software company founded in 2021.",
-        "TechNova AI uses Python, FastAPI, PostgreSQL, Docker, Kubernetes, and cloud infrastructure.",
-        "Customer support is available Monday through Friday.",
-    ]
-
-    results = rerank_documents(query, documents, reranker)
-
-    for document, score in results:
-        print(f"Score: {score:.4f}")
-        print(document)
-        print()

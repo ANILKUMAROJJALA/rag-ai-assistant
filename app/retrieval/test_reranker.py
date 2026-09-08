@@ -1,42 +1,70 @@
-from app.ingestion.embeddings import create_embedding_model
-from app.retrieval.reranker import create_reranker, rerank_documents
-from langchain_chroma import Chroma
+from app.retrieval.retriever import create_retriever
+from app.retrieval.reranker import (
+    create_reranker,
+    rerank_documents,
+)
 
 
-def create_vector_store():
-    embeddings = create_embedding_model()
+def test_query(query, retriever, reranker):
 
-    return Chroma(
-        collection_name="technova_documents",
-        persist_directory="chroma_db",
-        embedding_function=embeddings,
-    )
+    print("\n" + "=" * 70)
+    print(f"Query: {query}")
 
+    # Step 1: Vector retrieval
+    documents = retriever.invoke(query)
 
-if __name__ == "__main__":
-    vector_store = create_vector_store()
-    reranker = create_reranker()
+    print("\nBEFORE RERANKING:")
 
-    query = "What technologies does TechNova AI use?"
+    for i, document in enumerate(documents, start=1):
+        print(
+            f"{i}. "
+            f"{document.metadata.get('source')} | "
+            f"page={document.metadata.get('page_label')} | "
+            f"chunk={document.metadata.get('chunk_id')}"
+        )
 
-    retrieved = vector_store.similarity_search(
+    # Step 2: Cross-encoder reranking
+    ranked_documents = rerank_documents(
         query,
-        k=3,
-    )
-
-    results = rerank_documents(
-        query,
-        retrieved,
+        documents,
         reranker,
     )
 
-    print(f"Query: {query}\n")
+    print("\nAFTER RERANKING:")
 
-    for rank, (document, score) in enumerate(results, start=1):
-        print(f"--- Reranked Result {rank} ---")
-        print(f"Reranker score: {score:.4f}")
-        print(f"Source: {document.metadata.get('source')}")
-        print(f"Chunk ID: {document.metadata.get('chunk_id')}")
-        print("\nContent:")
-        print(document.page_content)
+    for i, (document, score) in enumerate(
+        ranked_documents,
+        start=1,
+    ):
+        print(
+            f"{i}. "
+            f"{document.metadata.get('source')} | "
+            f"page={document.metadata.get('page_label')} | "
+            f"chunk={document.metadata.get('chunk_id')} | "
+            f"score={float(score):.4f}"
+        )
+
+        print(
+            document.page_content[:200]
+        )
+
         print()
+
+
+if __name__ == "__main__":
+
+    retriever = create_retriever()
+    reranker = create_reranker()
+
+    test_queries = [
+        "What does NovaSearch do?",
+        "What is TechNova AI's refund policy?",
+        "How does TechNova AI protect customer passwords?",
+    ]
+
+    for query in test_queries:
+        test_query(
+            query,
+            retriever,
+            reranker,
+        )
