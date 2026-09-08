@@ -23,23 +23,23 @@ llm = create_llm()
 
 class RAGState(TypedDict):
     question: str
+    standalone_question: str
     conversation_history: list
     retrieved_documents: list
     reranked_documents: list
     answer: str
     sources: list
 
-
 # ---------------------------------------------------------
 # Retrieve Node
 # ---------------------------------------------------------
 
 def retrieve_node(state: RAGState):
-    """Retrieve relevant documents for the user's question."""
+    """Retrieve relevant documents."""
 
-    documents = retriever.invoke(
-        state["question"]
-    )
+    query = state["standalone_question"]
+
+    documents = retriever.invoke(query)
 
     return {
         "retrieved_documents": documents
@@ -54,7 +54,7 @@ def rerank_node(state: RAGState):
     """Rerank retrieved documents based on relevance."""
 
     ranked_documents = rerank_documents(
-        state["question"],
+        state["standalone_question"],
         state["retrieved_documents"],
         reranker,
     )
@@ -87,11 +87,11 @@ def format_context(documents):
 # ---------------------------------------------------------
 
 def generate_node(state: RAGState):
-    """Generate a grounded answer using the reranked documents."""
+    """Generate a grounded answer from the highest-ranked document."""
 
-    context = format_context(
-        state["reranked_documents"]
-    )
+    top_documents = state["reranked_documents"][:1]
+
+    context = format_context(top_documents)
 
     prompt = RAG_PROMPT.invoke(
         {
@@ -107,7 +107,7 @@ def generate_node(state: RAGState):
             "source": document.metadata.get("source"),
             "chunk_id": document.metadata.get("chunk_id"),
         }
-        for document in state["reranked_documents"]
+        for document in top_documents
     ]
 
     return {
@@ -115,53 +115,57 @@ def generate_node(state: RAGState):
         "sources": sources,
     }
 
+def rewrite_query_node(state: RAGState):
+    """Rewrite a follow-up question into a standalone question."""
 
+    history = state["conversation_history"]
+
+    if not history:
+        return {
+            "standalone_question": state["question"]
+        }
+
+    history_text = "\n".join(history)
+
+    rewrite_prompt = f"""
+Rewrite the user's latest question as a standalone question using the conversation history.
+
+Conversation history:
+{history_text}
+
+Latest question:
+{state["question"]}
+
+Return only the rewritten standalone question.
+"""
+
+    response = llm.invoke(rewrite_prompt)
+
+    return {
+        "standalone_question": response.content.strip()
+    }
+    
 # ---------------------------------------------------------
 # Build LangGraph
 # ---------------------------------------------------------
 
 def build_graph():
-    """Build and compile the RAG workflow."""
+    """Build and compile the conversational RAG workflow."""
 
     graph = StateGraph(RAGState)
 
-    graph.add_node(
-        "retrieve",
-        retrieve_node,
-    )
+    graph.add_node("rewrite_query", rewrite_query_node)
+    graph.add_node("retrieve", retrieve_node)
+    graph.add_node("rerank", rerank_node)
+    graph.add_node("generate", generate_node)
 
-    graph.add_node(
-        "rerank",
-        rerank_node,
-    )
-
-    graph.add_node(
-        "generate",
-        generate_node,
-    )
-
-    graph.add_edge(
-        START,
-        "retrieve",
-    )
-
-    graph.add_edge(
-        "retrieve",
-        "rerank",
-    )
-
-    graph.add_edge(
-        "rerank",
-        "generate",
-    )
-
-    graph.add_edge(
-        "generate",
-        END,
-    )
+    graph.add_edge(START, "rewrite_query")
+    graph.add_edge("rewrite_query", "retrieve")
+    graph.add_edge("retrieve", "rerank")
+    graph.add_edge("rerank", "generate")
+    graph.add_edge("generate", END)
 
     return graph.compile()
-
 
 # ---------------------------------------------------------
 # Test
@@ -171,28 +175,78 @@ if __name__ == "__main__":
 
     rag_graph = build_graph()
 
-    initial_state = {
+    conversation_history = []
+
+    # -------------------------
+    # First question
+    # -------------------------
+
+    first_state = {
         "question": "Where is TechNova AI headquartered?",
-        "conversation_history": [],
+        "standalone_question": "",
+        "conversation_history": conversation_history,
         "retrieved_documents": [],
         "reranked_documents": [],
         "answer": "",
         "sources": [],
     }
 
-    result = rag_graph.invoke(
-        initial_state
+    first_result = rag_graph.invoke(first_state)
+
+    print("\nQuestion 1:")
+    print(first_result["question"])
+
+    print("\nStandalone Question 1:")
+    print(first_result["standalone_question"])
+
+    print("\nAnswer 1:")
+    print(first_result["answer"])
+
+    print("\nSources 1:")
+    for source in first_result["sources"]:
+        print(
+            f"- {source['source']} "
+            f"(chunk {source['chunk_id']})"
+        )
+
+    # Save first turn into conversation history
+    conversation_history.append(
+        f"User: {first_result['question']}"
     )
 
-    print("\nQuestion:")
-    print(result["question"])
+    conversation_history.append(
+        f"Assistant: {first_result['answer']}"
+    )
 
-    print("\nAnswer:")
-    print(result["answer"])
+    # -------------------------
+    # Follow-up question
+    # -------------------------
 
-    print("\nSources:")
+    second_state = {
+        "question": "What technologies do they use?",
+        "standalone_question": "",
+        "conversation_history": conversation_history,
+        "retrieved_documents": [],
+        "reranked_documents": [],
+        "answer": "",
+        "sources": [],
+    }
 
-    for source in result["sources"]:
+    second_result = rag_graph.invoke(second_state)
+
+    print("\n" + "=" * 60)
+
+    print("\nQuestion 2:")
+    print(second_result["question"])
+
+    print("\nStandalone Question 2:")
+    print(second_result["standalone_question"])
+
+    print("\nAnswer 2:")
+    print(second_result["answer"])
+
+    print("\nSources 2:")
+    for source in second_result["sources"]:
         print(
             f"- {source['source']} "
             f"(chunk {source['chunk_id']})"
