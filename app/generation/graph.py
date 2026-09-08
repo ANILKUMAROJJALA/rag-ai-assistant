@@ -29,7 +29,35 @@ class RAGState(TypedDict):
     reranked_documents: list
     answer: str
     sources: list
+def rewrite_query_node(state: RAGState):
+    """Rewrite a follow-up question into a standalone question."""
 
+    history = state["conversation_history"]
+
+    if not history:
+        return {
+            "standalone_question": state["question"]
+        }
+
+    history_text = "\n".join(history)
+
+    rewrite_prompt = f"""
+Rewrite the user's latest question as a standalone question using the conversation history.
+
+Conversation history:
+{history_text}
+
+Latest question:
+{state["question"]}
+
+Return only the rewritten standalone question.
+"""
+
+    response = llm.invoke(rewrite_prompt)
+
+    return {
+        "standalone_question": response.content.strip()
+    }
 # ---------------------------------------------------------
 # Retrieve Node
 # ---------------------------------------------------------
@@ -87,7 +115,7 @@ def format_context(documents):
 # ---------------------------------------------------------
 
 def generate_node(state: RAGState):
-    """Generate a grounded answer from the highest-ranked document."""
+    """Generate a grounded answer and update conversation history."""
 
     top_documents = state["reranked_documents"][:1]
 
@@ -110,39 +138,20 @@ def generate_node(state: RAGState):
         for document in top_documents
     ]
 
+    updated_history = state["conversation_history"].copy()
+
+    updated_history.append(
+        f"User: {state['question']}"
+    )
+
+    updated_history.append(
+        f"Assistant: {response.content}"
+    )
+
     return {
         "answer": response.content,
         "sources": sources,
-    }
-
-def rewrite_query_node(state: RAGState):
-    """Rewrite a follow-up question into a standalone question."""
-
-    history = state["conversation_history"]
-
-    if not history:
-        return {
-            "standalone_question": state["question"]
-        }
-
-    history_text = "\n".join(history)
-
-    rewrite_prompt = f"""
-Rewrite the user's latest question as a standalone question using the conversation history.
-
-Conversation history:
-{history_text}
-
-Latest question:
-{state["question"]}
-
-Return only the rewritten standalone question.
-"""
-
-    response = llm.invoke(rewrite_prompt)
-
-    return {
-        "standalone_question": response.content.strip()
+        "conversation_history": updated_history,
     }
     
 # ---------------------------------------------------------
@@ -175,79 +184,59 @@ if __name__ == "__main__":
 
     rag_graph = build_graph()
 
-    conversation_history = []
-
     # -------------------------
-    # First question
+    # Turn 1
     # -------------------------
 
-    first_state = {
+    state = {
         "question": "Where is TechNova AI headquartered?",
         "standalone_question": "",
-        "conversation_history": conversation_history,
+        "conversation_history": [],
         "retrieved_documents": [],
         "reranked_documents": [],
         "answer": "",
         "sources": [],
     }
 
-    first_result = rag_graph.invoke(first_state)
+    result = rag_graph.invoke(state)
 
     print("\nQuestion 1:")
-    print(first_result["question"])
-
-    print("\nStandalone Question 1:")
-    print(first_result["standalone_question"])
+    print(result["question"])
 
     print("\nAnswer 1:")
-    print(first_result["answer"])
+    print(result["answer"])
 
-    print("\nSources 1:")
-    for source in first_result["sources"]:
-        print(
-            f"- {source['source']} "
-            f"(chunk {source['chunk_id']})"
-        )
-
-    # Save first turn into conversation history
-    conversation_history.append(
-        f"User: {first_result['question']}"
-    )
-
-    conversation_history.append(
-        f"Assistant: {first_result['answer']}"
-    )
+    print("\nConversation History:")
+    for message in result["conversation_history"]:
+        print(message)
 
     # -------------------------
-    # Follow-up question
+    # Turn 2
     # -------------------------
 
-    second_state = {
-        "question": "What technologies do they use?",
-        "standalone_question": "",
-        "conversation_history": conversation_history,
-        "retrieved_documents": [],
-        "reranked_documents": [],
-        "answer": "",
-        "sources": [],
-    }
+    result["question"] = "What technologies do they use?"
+    result["standalone_question"] = ""
 
-    second_result = rag_graph.invoke(second_state)
+    result = rag_graph.invoke(result)
 
     print("\n" + "=" * 60)
 
     print("\nQuestion 2:")
-    print(second_result["question"])
+    print(result["question"])
 
     print("\nStandalone Question 2:")
-    print(second_result["standalone_question"])
+    print(result["standalone_question"])
 
     print("\nAnswer 2:")
-    print(second_result["answer"])
+    print(result["answer"])
 
     print("\nSources 2:")
-    for source in second_result["sources"]:
+    for source in result["sources"]:
         print(
             f"- {source['source']} "
             f"(chunk {source['chunk_id']})"
         )
+
+    print("\nConversation History:")
+    for message in result["conversation_history"]:
+        print(message)
