@@ -24,14 +24,29 @@ def create_retriever():
 if __name__ == "__main__":
     retriever = create_retriever()
 
-    query = "Where is TechNova AI headquartered?"
+    test_queries = [
+        "What does NovaSearch do?",
+        "What is TechNova AI's refund policy?",
+        "How does TechNova AI protect customer passwords?",
+    ]
 
-    results = retriever.invoke(query)
+    for query in test_queries:
+        print("\n" + "=" * 70)
+        print(f"Query: {query}")
 
-    print(f"Query: {query}")
-    print(f"\nRetrieved {len(results)} chunks:\n")
+        results = retriever.invoke(query)
 
-    for i, document in enumerate(results, start=1):
-        print(f"--- Result {i} ---")
-        print(document.page_content)
-        print()
+        print(f"Retrieved {len(results)} chunks:\n")
+
+        for i, document in enumerate(results, start=1):
+            metadata = document.metadata
+
+            print(f"--- Result {i} ---")
+            print("Source:", metadata.get("source"))
+            print("File type:", metadata.get("file_type"))
+            print("Page:", metadata.get("page_label"))
+            print("Chunk ID:", metadata.get("chunk_id"))
+
+            print("\nContent:")
+            print(document.page_content[:400])
+            print()
