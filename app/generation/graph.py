@@ -1,7 +1,8 @@
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import InMemorySaver
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from app.retrieval.retriever import create_retriever
 from app.retrieval.reranker import create_reranker, rerank_documents
@@ -16,7 +17,13 @@ from app.generation.prompts import RAG_PROMPT
 retriever = create_retriever()
 reranker = create_reranker()
 llm = create_llm()
-checkpointer = InMemorySaver()
+
+connection = sqlite3.connect(
+    "rag_checkpoints.sqlite",
+    check_same_thread=False,
+)
+
+checkpointer = SqliteSaver(connection)
 
 
 # ---------------------------------------------------------
@@ -341,25 +348,22 @@ if __name__ == "__main__":
 
     config = {
         "configurable": {
-            "thread_id": "routing-test-2"
+            "thread_id": "sqlite-proof-final"
         }
     }
 
-    initial_state = {
-        "question": "What is TechNova AI's refund policy?",
-        "standalone_question": "",
-        "conversation_history": [],
-        "retrieved_documents": [],
-        "reranked_documents": [],
-        "answer": "",
-        "sources": [],
-        "route": "",
-    }
+    follow_up_input = {
+    "question": "What technologies do they use?",
+    "standalone_question": "",
+}
+
+    
 
     result = rag_graph.invoke(
-        initial_state,
-        config=config,
-    )
+    follow_up_input,
+    config=config,
+)
+
 
     print("\nQuestion:")
     print(result["question"])
@@ -367,8 +371,15 @@ if __name__ == "__main__":
     print("\nRoute:")
     print(result["route"])
 
+    print("\nStandalone Question:")
+    print(result["standalone_question"])
+
     print("\nAnswer:")
     print(result["answer"])
 
     print("\nSources:")
     print(result["sources"])
+
+    print("\nConversation History:")
+    for message in result["conversation_history"]:
+        print(message)
