@@ -1,53 +1,77 @@
+from functools import lru_cache
+
 from langchain_chroma import Chroma
 
 from app.ingestion.embeddings import create_embedding_model
 
 
-def create_retriever():
-    """Load the existing Chroma vector store and create a retriever."""
+PERSIST_DIRECTORY = "chroma_db"
+COLLECTION_NAME = "technova_documents"
+
+
+@lru_cache(maxsize=1)
+def create_vector_store():
+    """
+    Create the Chroma vector store once and reuse it.
+
+    lru_cache prevents us from repeatedly loading the embedding model
+    every time retrieval or metadata inspection is performed.
+    """
 
     embeddings = create_embedding_model()
 
-    vector_store = Chroma(
-        collection_name="technova_documents",
-        persist_directory="chroma_db",
+    return Chroma(
+        collection_name=COLLECTION_NAME,
+        persist_directory=PERSIST_DIRECTORY,
         embedding_function=embeddings,
     )
 
-    retriever = vector_store.as_retriever(
-    search_kwargs={"k": 5}
-)
+
+def get_available_sources():
+    """
+    Read all unique document source names dynamically
+    from metadata stored inside Chroma.
+    """
+
+    vector_store = create_vector_store()
+
+    data = vector_store.get(
+        include=["metadatas"]
+    )
+
+    sources = set()
+
+    for metadata in data["metadatas"]:
+        source = metadata.get("source")
+
+        if source:
+            sources.add(source)
+
+    return sorted(sources)
 
 
-    return retriever
+def retrieve_documents(
+    query,
+    metadata_filter=None,
+    k=5,
+):
+    """
+    Perform semantic retrieval with an optional metadata filter.
+    """
 
+    vector_store = create_vector_store()
 
-if __name__ == "__main__":
-    retriever = create_retriever()
+    if metadata_filter:
+        documents = vector_store.similarity_search(
+            query,
+            k=k,
+            filter=metadata_filter,
+        )
 
-    test_queries = [
-        "What does NovaSearch do?",
-        "What is TechNova AI's refund policy?",
-        "How does TechNova AI protect customer passwords?",
-    ]
+    else:
+        documents = vector_store.similarity_search(
+            query,
+            k=k,
+        )
 
-    for query in test_queries:
-        print("\n" + "=" * 70)
-        print(f"Query: {query}")
-
-        results = retriever.invoke(query)
-
-        print(f"Retrieved {len(results)} chunks:\n")
-
-        for i, document in enumerate(results, start=1):
-            metadata = document.metadata
-
-            print(f"--- Result {i} ---")
-            print("Source:", metadata.get("source"))
-            print("File type:", metadata.get("file_type"))
-            print("Page:", metadata.get("page_label"))
-            print("Chunk ID:", metadata.get("chunk_id"))
-
-            print("\nContent:")
-            print(document.page_content[:400])
-            print()
+    return documents

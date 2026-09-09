@@ -1,22 +1,41 @@
 from typing import TypedDict
+import sqlite3
 
 from langgraph.graph import StateGraph, START, END
-import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from app.retrieval.retriever import create_retriever
-from app.retrieval.reranker import create_reranker, rerank_documents
+from app.retrieval.hybrid_retriever import (
+    hybrid_retrieve_documents,
+)
+from app.retrieval.retriever import (
+    get_available_sources,
+)
+from app.retrieval.reranker import (
+    create_reranker,
+    rerank_documents,
+)
 from app.generation.llm import create_llm
 from app.generation.prompts import RAG_PROMPT
 
 
-# ---------------------------------------------------------
-# Initialize expensive components once
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
 
-retriever = create_retriever()
+RELEVANCE_THRESHOLD = 0.0
+
+
+# --------------------------------------------------
+# Expensive components
+# --------------------------------------------------
+
 reranker = create_reranker()
 llm = create_llm()
+
+
+# --------------------------------------------------
+# SQLite checkpointing
+# --------------------------------------------------
 
 connection = sqlite3.connect(
     "rag_checkpoints.sqlite",
@@ -26,27 +45,33 @@ connection = sqlite3.connect(
 checkpointer = SqliteSaver(connection)
 
 
-# ---------------------------------------------------------
-# LangGraph State
-# ---------------------------------------------------------
+# --------------------------------------------------
+# LangGraph state
+# --------------------------------------------------
 
 class RAGState(TypedDict):
     question: str
     standalone_question: str
     conversation_history: list
+
     retrieved_documents: list
     reranked_documents: list
+    reranker_scores: list
+
     answer: str
     sources: list
+
     route: str
+    metadata_filter: dict
+
+    retrieval_relevant: bool
 
 
-# ---------------------------------------------------------
-# Route Node
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Route question
+# --------------------------------------------------
 
 def route_question_node(state: RAGState):
-    """Decide whether the question needs document retrieval."""
 
     routing_prompt = f"""
 Classify the user's message into exactly one category:
@@ -54,26 +79,51 @@ Classify the user's message into exactly one category:
 rag
 direct
 
-Use "rag" when the user is asking for information that should come
-from the company documents.
+Use "rag" when the user is asking a factual question
+that may require information from the company documents.
 
-Use "direct" for greetings, thanks, casual conversation,
-or general conversational messages that do not require the documents.
+Use "direct" only for greetings, thanks, casual conversation,
+or messages that do not require factual knowledge.
+
+Examples:
+
+"Hi" -> direct
+"Thanks" -> direct
+"How are you?" -> direct
+
+"What is the refund policy?" -> rag
+"What does NovaSearch do?" -> rag
+"What is the capital of France?" -> rag
+
+The retrieval relevance guard later decides whether
+the company documents contain enough evidence.
 
 User message:
 {state["question"]}
 
 Return only:
+
 rag
+
 or
+
 direct
 """
 
-    response = llm.invoke(routing_prompt)
+    response = llm.invoke(
+        routing_prompt
+    )
 
-    route = response.content.strip().lower()
+    route = (
+        response.content
+        .strip()
+        .lower()
+    )
 
-    if route not in {"rag", "direct"}:
+    if route not in {
+        "rag",
+        "direct",
+    }:
         route = "rag"
 
     return {
@@ -82,30 +132,34 @@ direct
 
 
 def choose_route(state: RAGState):
-    """Return the route selected by the routing node."""
-
     return state["route"]
 
 
-# ---------------------------------------------------------
-# Direct Response Node
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Direct response
+# --------------------------------------------------
 
 def direct_response_node(state: RAGState):
-    """Answer conversational questions without document retrieval."""
 
     prompt = f"""
 You are a helpful AI assistant.
 
-Respond naturally and briefly to the user's conversational message.
+Respond naturally and briefly to the user's
+conversational message.
 
 User:
 {state["question"]}
 """
 
-    response = llm.invoke(prompt)
+    response = llm.invoke(
+        prompt
+    )
 
-    updated_history = state["conversation_history"].copy()
+    updated_history = (
+        state[
+            "conversation_history"
+        ].copy()
+    )
 
     updated_history.append(
         f"User: {state['question']}"
@@ -116,137 +170,489 @@ User:
     )
 
     return {
-        "answer": response.content,
-        "sources": [],
-        "conversation_history": updated_history,
+        "answer":
+            response.content,
+
+        "sources":
+            [],
+
+        "conversation_history":
+            updated_history,
     }
 
 
-# ---------------------------------------------------------
-# Rewrite Query Node
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Rewrite conversational query
+# --------------------------------------------------
 
 def rewrite_query_node(state: RAGState):
-    """Rewrite a follow-up question into a standalone question."""
 
-    history = state["conversation_history"]
+    history = state[
+        "conversation_history"
+    ]
 
     if not history:
+
         return {
-            "standalone_question": state["question"]
+            "standalone_question":
+                state["question"]
         }
 
-    history_text = "\n".join(history)
+    history_text = "\n".join(
+        history
+    )
 
     rewrite_prompt = f"""
-Rewrite the user's latest question as a standalone question
-using the conversation history.
+Rewrite the user's latest question as a standalone
+question using the conversation history.
 
 Conversation history:
+
 {history_text}
 
 Latest question:
+
 {state["question"]}
 
 Return only the rewritten standalone question.
 """
 
-    response = llm.invoke(rewrite_prompt)
-
-    return {
-        "standalone_question": response.content.strip()
-    }
-
-
-# ---------------------------------------------------------
-# Retrieve Node
-# ---------------------------------------------------------
-
-def retrieve_node(state: RAGState):
-    """Retrieve relevant documents."""
-
-    documents = retriever.invoke(
-        state["standalone_question"]
+    response = llm.invoke(
+        rewrite_prompt
     )
 
     return {
-        "retrieved_documents": documents
+        "standalone_question":
+            response.content.strip()
     }
 
 
-# ---------------------------------------------------------
-# Rerank Node
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Metadata filtering
+# --------------------------------------------------
+
+def metadata_filter_node(state: RAGState):
+
+    question = state[
+        "standalone_question"
+    ]
+
+    question_lower = (
+        question.lower()
+    )
+
+    available_sources = (
+        get_available_sources()
+    )
+
+    if not available_sources:
+
+        return {
+            "metadata_filter": {}
+        }
+
+
+    # Exact filename fast path
+    for source in available_sources:
+
+        if (
+            source.lower()
+            in question_lower
+        ):
+
+            return {
+                "metadata_filter": {
+                    "source": source
+                }
+            }
+
+
+    # Detect document-scoped intent
+    document_scope_phrases = [
+        "use the",
+        "use this",
+        "use only",
+        "search only",
+        "only in",
+        "only from",
+        "from the document",
+        "from this document",
+        "from the file",
+        "from this file",
+        "in the document",
+        "in this document",
+        "in the file",
+        "in this file",
+        "check the document",
+        "check this document",
+        "check the file",
+        "check this file",
+        "according to the document",
+        "according to the file",
+    ]
+
+    document_words = [
+        "document",
+        "file",
+        "pdf",
+        "docx",
+        "txt",
+        "guide",
+        "handbook",
+        "report",
+    ]
+
+    has_scope_phrase = any(
+        phrase in question_lower
+        for phrase
+        in document_scope_phrases
+    )
+
+    has_document_word = any(
+        word in question_lower
+        for word
+        in document_words
+    )
+
+
+    # Normal query: don't run metadata LLM
+    if (
+        not has_scope_phrase
+        and
+        not has_document_word
+    ):
+
+        return {
+            "metadata_filter": {}
+        }
+
+
+    # Natural-language document mapping
+    sources_text = "\n".join(
+        f"- {source}"
+        for source
+        in available_sources
+    )
+
+    filter_prompt = f"""
+You are selecting whether the user's question refers
+to one specific document from the indexed knowledge base.
+
+Available document sources:
+
+{sources_text}
+
+User question:
+
+{question}
+
+Rules:
+
+1. If the user clearly refers to one specific document,
+return the exact source filename from the available list.
+
+2. The user does not need to type the exact filename.
+
+Examples:
+
+"refund document"
+may refer to:
+refund_policy.pdf
+
+"product guide"
+may refer to:
+product_guide.docx
+
+"company information file"
+may refer to:
+company_info.txt
+
+3. If you cannot confidently determine one specific document,
+return:
+
+none
+
+4. Never invent a filename.
+
+5. Return only one exact filename from the available list,
+or return:
+
+none
+"""
+
+    response = llm.invoke(
+        filter_prompt
+    )
+
+    selected_source = (
+        response.content.strip()
+    )
+
+    if (
+        selected_source
+        in available_sources
+    ):
+
+        return {
+            "metadata_filter": {
+                "source":
+                    selected_source
+            }
+        }
+
+    return {
+        "metadata_filter": {}
+    }
+
+
+# --------------------------------------------------
+# NEW: Hybrid retrieval
+# --------------------------------------------------
+
+def retrieve_node(state: RAGState):
+
+    documents = (
+        hybrid_retrieve_documents(
+            state[
+                "standalone_question"
+            ],
+
+            metadata_filter=state.get(
+                "metadata_filter"
+            ),
+
+            vector_k=5,
+            bm25_k=5,
+
+            # Send more candidates to reranker
+            final_k=8,
+        )
+    )
+
+    return {
+        "retrieved_documents":
+            documents
+    }
+
+
+# --------------------------------------------------
+# Cross-encoder reranking
+# --------------------------------------------------
 
 def rerank_node(state: RAGState):
-    """Rerank retrieved documents based on relevance."""
 
-    ranked_documents = rerank_documents(
-        state["standalone_question"],
-        state["retrieved_documents"],
-        reranker,
+    ranked_documents = (
+        rerank_documents(
+            state[
+                "standalone_question"
+            ],
+
+            state[
+                "retrieved_documents"
+            ],
+
+            reranker,
+        )
     )
 
     reranked_documents = [
         document
-        for document, score in ranked_documents
+        for document, score
+        in ranked_documents
+    ]
+
+    reranker_scores = [
+        float(score)
+        for document, score
+        in ranked_documents
     ]
 
     return {
-        "reranked_documents": reranked_documents
+        "reranked_documents":
+            reranked_documents,
+
+        "reranker_scores":
+            reranker_scores,
     }
 
 
-# ---------------------------------------------------------
-# Context Formatting
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Relevance guard
+# --------------------------------------------------
 
-def format_context(documents):
-    """Combine reranked documents into context for the LLM."""
+def relevance_guard_node(
+    state: RAGState,
+):
+
+    scores = state[
+        "reranker_scores"
+    ]
+
+    if not scores:
+
+        return {
+            "retrieval_relevant":
+                False
+        }
+
+    top_score = scores[0]
+
+    is_relevant = (
+        top_score
+        >= RELEVANCE_THRESHOLD
+    )
+
+    return {
+        "retrieval_relevant":
+            is_relevant
+    }
+
+
+def choose_relevance(
+    state: RAGState,
+):
+
+    if state[
+        "retrieval_relevant"
+    ]:
+        return "relevant"
+
+    return "irrelevant"
+
+
+# --------------------------------------------------
+# No-answer response
+# --------------------------------------------------
+
+def no_answer_node(
+    state: RAGState,
+):
+
+    answer = (
+        "I don't have enough information "
+        "in the provided documents "
+        "to answer that."
+    )
+
+    updated_history = (
+        state[
+            "conversation_history"
+        ].copy()
+    )
+
+    updated_history.append(
+        f"User: {state['question']}"
+    )
+
+    updated_history.append(
+        f"Assistant: {answer}"
+    )
+
+    return {
+        "answer":
+            answer,
+
+        "sources":
+            [],
+
+        "conversation_history":
+            updated_history,
+    }
+
+
+# --------------------------------------------------
+# Context formatting
+# --------------------------------------------------
+
+def format_context(
+    documents,
+):
 
     return "\n\n".join(
         document.page_content
-        for document in documents
+        for document
+        in documents
     )
 
 
-# ---------------------------------------------------------
-# Generate Node
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Grounded generation
+# --------------------------------------------------
 
 def generate_node(state: RAGState):
-    """Generate a grounded RAG answer."""
 
-    top_documents = state["reranked_documents"][:2]
+    top_documents = (
+        state[
+            "reranked_documents"
+        ][:2]
+    )
 
-    context = format_context(top_documents)
+    context = format_context(
+        top_documents
+    )
 
     prompt = RAG_PROMPT.invoke(
         {
-            "context": context,
-            "question": state["question"],
+            "context":
+                context,
+
+            "question":
+                state["question"],
         }
     )
 
-    response = llm.invoke(prompt)
+    response = llm.invoke(
+        prompt
+    )
 
     sources = []
 
     for document in top_documents:
-        metadata = document.metadata
+
+        metadata = (
+            document.metadata
+        )
 
         source_info = {
-            "source": metadata.get("source"),
-            "file_type": metadata.get("file_type"),
-            "chunk_id": metadata.get("chunk_id"),
+            "source":
+                metadata.get(
+                    "source"
+                ),
+
+            "file_type":
+                metadata.get(
+                    "file_type"
+                ),
+
+            "chunk_id":
+                metadata.get(
+                    "chunk_id"
+                ),
         }
 
-        if metadata.get("page_label") is not None:
-            source_info["page"] = metadata.get("page_label")
+        if (
+            metadata.get(
+                "page_label"
+            )
+            is not None
+        ):
 
-        sources.append(source_info)
+            source_info[
+                "page"
+            ] = metadata.get(
+                "page_label"
+            )
 
-    updated_history = state["conversation_history"].copy()
+        sources.append(
+            source_info
+        )
+
+
+    updated_history = (
+        state[
+            "conversation_history"
+        ].copy()
+    )
 
     updated_history.append(
         f"User: {state['question']}"
@@ -257,20 +663,26 @@ def generate_node(state: RAGState):
     )
 
     return {
-        "answer": response.content,
-        "sources": sources,
-        "conversation_history": updated_history,
+        "answer":
+            response.content,
+
+        "sources":
+            sources,
+
+        "conversation_history":
+            updated_history,
     }
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # Build LangGraph
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 def build_graph():
-    """Build and compile the conversational RAG workflow."""
 
-    graph = StateGraph(RAGState)
+    graph = StateGraph(
+        RAGState
+    )
 
     graph.add_node(
         "route_question",
@@ -288,6 +700,11 @@ def build_graph():
     )
 
     graph.add_node(
+        "metadata_filter",
+        metadata_filter_node,
+    )
+
+    graph.add_node(
         "retrieve",
         retrieve_node,
     )
@@ -298,21 +715,38 @@ def build_graph():
     )
 
     graph.add_node(
+        "relevance_guard",
+        relevance_guard_node,
+    )
+
+    graph.add_node(
+        "no_answer",
+        no_answer_node,
+    )
+
+    graph.add_node(
         "generate",
         generate_node,
     )
 
+
+    # Start
     graph.add_edge(
         START,
         "route_question",
     )
 
+
+    # Conversation vs RAG
     graph.add_conditional_edges(
         "route_question",
         choose_route,
         {
-            "direct": "direct_response",
-            "rag": "rewrite_query",
+            "direct":
+                "direct_response",
+
+            "rag":
+                "rewrite_query",
         },
     )
 
@@ -321,8 +755,15 @@ def build_graph():
         END,
     )
 
+
+    # RAG pipeline
     graph.add_edge(
         "rewrite_query",
+        "metadata_filter",
+    )
+
+    graph.add_edge(
+        "metadata_filter",
         "retrieve",
     )
 
@@ -333,11 +774,30 @@ def build_graph():
 
     graph.add_edge(
         "rerank",
-        "generate",
+        "relevance_guard",
+    )
+
+
+    # Relevant vs irrelevant
+    graph.add_conditional_edges(
+        "relevance_guard",
+        choose_relevance,
+        {
+            "relevant":
+                "generate",
+
+            "irrelevant":
+                "no_answer",
+        },
     )
 
     graph.add_edge(
         "generate",
+        END,
+    )
+
+    graph.add_edge(
+        "no_answer",
         END,
     )
 
@@ -346,48 +806,158 @@ def build_graph():
     )
 
 
-# ---------------------------------------------------------
-# Test
-# ---------------------------------------------------------
+# --------------------------------------------------
+# Local test
+# --------------------------------------------------
 
 if __name__ == "__main__":
 
-    rag_graph = build_graph()
+    app = build_graph()
 
     config = {
         "configurable": {
-            "thread_id": "sqlite-proof-final"
+            "thread_id":
+                "hybrid-rag-test-1"
         }
     }
 
-    follow_up_input = {
-    "question": "What is TechNova AI's refund policy?",
-    "standalone_question": "",
-}
+    initial_state = {
+        "question":
+            "What does NovaSearch do?",
 
-    
+        "standalone_question":
+            "",
 
-    result = rag_graph.invoke(
-    follow_up_input,
-    config=config,
-)
+        "conversation_history":
+            [],
+
+        "retrieved_documents":
+            [],
+
+        "reranked_documents":
+            [],
+
+        "reranker_scores":
+            [],
+
+        "answer":
+            "",
+
+        "sources":
+            [],
+
+        "route":
+            "",
+
+        "metadata_filter":
+            {},
+
+        "retrieval_relevant":
+            False,
+    }
+
+    result = app.invoke(
+        initial_state,
+        config=config,
+    )
 
 
     print("\nQuestion:")
-    print(result["question"])
+    print(
+        result["question"]
+    )
 
     print("\nRoute:")
-    print(result["route"])
+    print(
+        result["route"]
+    )
 
-    print("\nStandalone Question:")
-    print(result["standalone_question"])
+    print(
+        "\nStandalone Question:"
+    )
+    print(
+        result[
+            "standalone_question"
+        ]
+    )
+
+    print(
+        "\nMetadata Filter:"
+    )
+    print(
+        result[
+            "metadata_filter"
+        ]
+    )
+
+    print(
+        "\nRetrieved Candidates:"
+    )
+
+    for index, document in enumerate(
+        result[
+            "retrieved_documents"
+        ],
+        start=1,
+    ):
+
+        print(
+            index,
+            document.metadata.get(
+                "source"
+            ),
+            "chunk",
+            document.metadata.get(
+                "chunk_id"
+            ),
+        )
+
+    print(
+        "\nReranker Scores:"
+    )
+    print(
+        result[
+            "reranker_scores"
+        ]
+    )
+
+    if result[
+        "reranker_scores"
+    ]:
+
+        print(
+            "\nTop Reranker Score:"
+        )
+        print(
+            result[
+                "reranker_scores"
+            ][0]
+        )
+
+    print(
+        "\nRetrieval Relevant:"
+    )
+    print(
+        result[
+            "retrieval_relevant"
+        ]
+    )
 
     print("\nAnswer:")
-    print(result["answer"])
+    print(
+        result["answer"]
+    )
 
     print("\nSources:")
-    print(result["sources"])
+    print(
+        result["sources"]
+    )
 
-    print("\nConversation History:")
-    for message in result["conversation_history"]:
+    print(
+        "\nConversation History:"
+    )
+
+    for message in result[
+        "conversation_history"
+    ]:
         print(message)
