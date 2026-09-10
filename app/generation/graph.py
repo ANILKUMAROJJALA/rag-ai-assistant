@@ -88,7 +88,8 @@ class RAGState(TypedDict):
 
     metadata_filter: dict
 
-    retrieval_relevant: bool
+    # None means retrieval was not performed.
+    retrieval_relevant: bool | None
 
 
 # --------------------------------------------------
@@ -170,99 +171,232 @@ def choose_route(
 
 
 # --------------------------------------------------
-# Direct response
-# --------------------------------------------------
-
-def direct_response_node(
-    state: RAGState,
-):
-
-    prompt = f"""
-You are a helpful AI assistant.
-
-Respond naturally and briefly to the user's
-conversational message.
-
-User:
-
-{state["question"]}
-"""
-
-    response = llm.invoke(
-        prompt
-    )
-
-    updated_history = (
-        state[
-            "conversation_history"
-        ].copy()
-    )
-
-    updated_history.append(
-        f"User: {state['question']}"
-    )
-
-    updated_history.append(
-        f"Assistant: {response.content}"
-    )
-
-    return {
-        "answer":
-            response.content,
-
-        "sources":
-            [],
-
-        "conversation_history":
-            updated_history,
-    }
-
-
-# --------------------------------------------------
 # Rewrite conversational query
 # --------------------------------------------------
 
 def rewrite_query_node(
     state: RAGState,
 ):
+    """
+    Convert a conversational follow-up question into a
+    standalone retrieval question.
 
-    history = state[
-        "conversation_history"
+    If there is no conversation history, the original
+    question is already treated as standalone.
+    """
+
+    question = state[
+        "question"
     ]
 
-    if not history:
+    conversation_history = state.get(
+        "conversation_history",
+        [],
+    )
+
+    # --------------------------------------------------
+    # Fresh conversation
+    # --------------------------------------------------
+
+    if not conversation_history:
 
         return {
             "standalone_question":
-                state["question"]
+                question
         }
 
+
+    # --------------------------------------------------
+    # Format conversation history
+    # --------------------------------------------------
+
     history_text = "\n".join(
-        history
+        str(message)
+        for message
+        in conversation_history
     )
 
+
+    # --------------------------------------------------
+    # Query rewrite prompt
+    # --------------------------------------------------
+
     rewrite_prompt = f"""
-Rewrite the user's latest question as a standalone
-question using the conversation history.
+Rewrite the user's current question into a standalone
+question that can be understood without seeing the
+conversation history.
+
+Use the conversation history only when it is necessary
+to resolve references in the current question.
 
 Conversation history:
 
 {history_text}
 
-Latest question:
+Current user question:
 
-{state["question"]}
+{question}
 
-Return only the rewritten standalone question.
+Rules:
+
+1. Preserve the user's original meaning.
+
+2. Resolve pronouns or references such as:
+   "it"
+   "that"
+   "this"
+   "they"
+   "the product"
+   when the conversation history clearly identifies
+   what the user means.
+
+3. Do not add unrelated information from previous
+   conversation turns.
+
+4. Do not assume that the current question is about
+   the previous topic unless the wording actually
+   depends on that previous topic.
+
+5. If the current question is already understandable
+   by itself, return it unchanged.
+
+6. Do not answer the question.
+
+7. Return only the standalone question.
+
+Standalone question:
 """
 
     response = llm.invoke(
         rewrite_prompt
     )
 
+    standalone_question = (
+        response.content
+        .strip()
+    )
+
+    # --------------------------------------------------
+    # Safety fallback
+    # --------------------------------------------------
+
+    if not standalone_question:
+
+        standalone_question = (
+            question
+        )
+
     return {
         "standalone_question":
-            response.content.strip()
+            standalone_question
+    }
+
+
+# --------------------------------------------------
+# Direct response
+# --------------------------------------------------
+
+def direct_response_node(
+    state: RAGState,
+) -> RAGState:
+    """
+    Handle greetings, thanks, and casual conversation
+    without running the RAG retrieval pipeline.
+
+    RAG-specific state is cleared so information from
+    the previous turn does not leak into the current
+    API response.
+    """
+
+    question = state[
+        "question"
+    ]
+
+    response = llm.invoke(
+        [
+            (
+                "system",
+                """
+You are a helpful AI assistant.
+
+The user's message has been classified as casual
+conversation and does not require document retrieval.
+
+Respond naturally and briefly.
+
+Do not answer factual questions that should instead
+be answered using the private document knowledge base.
+""",
+            ),
+            (
+                "human",
+                question,
+            ),
+        ]
+    )
+
+    answer = (
+        response.content
+    )
+
+
+    # --------------------------------------------------
+    # Preserve conversation history
+    # --------------------------------------------------
+
+    updated_history = (
+        state.get(
+            "conversation_history",
+            [],
+        ).copy()
+    )
+
+    updated_history.append(
+        f"User: {question}"
+    )
+
+    updated_history.append(
+        f"Assistant: {answer}"
+    )
+
+
+    # --------------------------------------------------
+    # Clear previous RAG state
+    # --------------------------------------------------
+
+    return {
+        "question":
+            question,
+
+        "answer":
+            answer,
+
+        "route":
+            "direct",
+
+        "conversation_history":
+            updated_history,
+
+        "standalone_question":
+            "",
+
+        "metadata_filter":
+            {},
+
+        "retrieved_documents":
+            [],
+
+        "reranked_documents":
+            [],
+
+        "reranker_scores":
+            [],
+
+        "retrieval_relevant":
+            None,
+
+        "sources":
+            [],
     }
 
 
@@ -924,7 +1058,7 @@ if __name__ == "__main__":
             {},
 
         "retrieval_relevant":
-            False,
+            None,
     }
 
     result = app.invoke(
@@ -934,14 +1068,18 @@ if __name__ == "__main__":
 
 
     print("\nQuestion:")
+
     print(
         result["question"]
     )
 
+
     print("\nRoute:")
+
     print(
         result["route"]
     )
+
 
     print(
         "\nStandalone Question:"
@@ -953,6 +1091,7 @@ if __name__ == "__main__":
         ]
     )
 
+
     print(
         "\nMetadata Filter:"
     )
@@ -962,6 +1101,7 @@ if __name__ == "__main__":
             "metadata_filter"
         ]
     )
+
 
     print(
         "\nRetrieved Candidates:"
@@ -985,6 +1125,7 @@ if __name__ == "__main__":
             ),
         )
 
+
     print(
         "\nReranker Scores:"
     )
@@ -994,6 +1135,7 @@ if __name__ == "__main__":
             "reranker_scores"
         ]
     )
+
 
     if result[
         "reranker_scores"
@@ -1009,6 +1151,7 @@ if __name__ == "__main__":
             ][0]
         )
 
+
     print(
         "\nRetrieval Relevant:"
     )
@@ -1019,17 +1162,20 @@ if __name__ == "__main__":
         ]
     )
 
+
     print("\nAnswer:")
 
     print(
         result["answer"]
     )
 
+
     print("\nSources:")
 
     print(
         result["sources"]
     )
+
 
     print(
         "\nConversation History:"
