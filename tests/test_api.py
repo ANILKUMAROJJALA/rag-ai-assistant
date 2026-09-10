@@ -1,12 +1,10 @@
-from fastapi.testclient import TestClient
-
-from app.api.main import app
-
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
+
 
 client = TestClient(app)
 
@@ -28,7 +26,8 @@ def test_health_check():
     assert data["status"] == "healthy"
 
     assert data["service"] == "RAG AI Assistant"
-    
+
+
 def test_empty_question_validation():
     """
     An empty question should be rejected
@@ -44,7 +43,9 @@ def test_empty_question_validation():
     )
 
     assert response.status_code == 422
-    
+
+
+@pytest.mark.integration
 def test_rag_novasearch_question():
     """
     A known document question should run through
@@ -100,6 +101,9 @@ def test_rag_novasearch_question():
         "company_info.txt"
         in source_names
     )
+
+
+@pytest.mark.integration
 def test_conversation_memory_and_query_rewriting():
     """
     A follow-up question should use the same
@@ -168,6 +172,9 @@ def test_conversation_memory_and_query_rewriting():
         "NovaSearch"
         in standalone_question
     )
+
+
+@pytest.mark.integration
 def test_rag_direct_rag_state_transition():
     """
     A direct-response turn must not inherit stale
@@ -284,7 +291,9 @@ def test_rag_direct_rag_state_transition():
         "company_info.txt"
         in source_names
     )
-    
+
+
+@pytest.mark.integration
 def test_no_answer_for_unsupported_question():
     """
     A question that is not supported by the private
