@@ -3,31 +3,32 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+from app.config import (
+    LLM_MODEL,
+    LLM_TEMPERATURE,
+)
+
 
 load_dotenv()
 
 
 def create_llm():
-    """Create the OpenAI chat model."""
+    """
+    Create the LLM used throughout
+    the RAG application.
+    """
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("LLM_MODEL", "gpt-5.6")
+    api_key = os.getenv(
+        "OPENAI_API_KEY"
+    )
 
     if not api_key:
-        raise ValueError("OPENAI_API_KEY was not found.")
+        raise ValueError(
+            "OPENAI_API_KEY was not found."
+        )
 
     return ChatOpenAI(
-        model=model,
+        model=LLM_MODEL,
         api_key=api_key,
-        temperature=0,
+        temperature=LLM_TEMPERATURE,
     )
-
-
-if __name__ == "__main__":
-    llm = create_llm()
-
-    response = llm.invoke(
-        "Explain what Retrieval-Augmented Generation (RAG) is in one sentence."
-    )
-
-    print(response.content)

@@ -2,32 +2,63 @@ import hashlib
 import json
 from pathlib import Path
 
-from app.ingestion.loader import load_document
-from app.ingestion.chunking import split_documents
-from app.ingestion.vectorstore import create_vector_store
+from app.config import (
+    RAW_DATA_DIRECTORY,
+    INGESTION_MANIFEST_PATH,
+)
+
+from app.ingestion.loader import (
+    load_document,
+    SUPPORTED_EXTENSIONS,
+)
+
+from app.ingestion.chunking import (
+    split_documents,
+)
+
+from app.ingestion.vectorstore import (
+    create_vector_store,
+)
 
 
-RAW_DATA_FOLDER = Path("data/raw")
-MANIFEST_PATH = Path("data/processed/ingestion_manifest.json")
+RAW_DATA_FOLDER = Path(
+    RAW_DATA_DIRECTORY
+)
+
+MANIFEST_PATH = Path(
+    INGESTION_MANIFEST_PATH
+)
 
 
-def calculate_file_hash(file_path: Path) -> str:
+def calculate_file_hash(
+    file_path: Path,
+) -> str:
     """
-    Calculate SHA256 hash of a file.
+    Calculate the SHA-256 hash of a file.
 
-    If the file content changes, the hash changes.
+    If the file content changes,
+    the hash changes.
     """
 
     sha256 = hashlib.sha256()
 
-    with open(file_path, "rb") as file:
+    with open(
+        file_path,
+        "rb",
+    ) as file:
+
         while True:
-            block = file.read(1024 * 1024)
+
+            block = file.read(
+                1024 * 1024
+            )
 
             if not block:
                 break
 
-            sha256.update(block)
+            sha256.update(
+                block
+            )
 
     return sha256.hexdigest()
 
@@ -35,6 +66,9 @@ def calculate_file_hash(file_path: Path) -> str:
 def load_manifest():
     """
     Load the previous ingestion state.
+
+    Returns an empty dictionary
+    if no manifest exists yet.
     """
 
     if not MANIFEST_PATH.exists():
@@ -45,12 +79,17 @@ def load_manifest():
         "r",
         encoding="utf-8",
     ) as file:
-        return json.load(file)
+
+        return json.load(
+            file
+        )
 
 
-def save_manifest(manifest):
+def save_manifest(
+    manifest,
+):
     """
-    Save current ingestion state.
+    Save the current ingestion state.
     """
 
     MANIFEST_PATH.parent.mkdir(
@@ -63,6 +102,7 @@ def save_manifest(manifest):
         "w",
         encoding="utf-8",
     ) as file:
+
         json.dump(
             manifest,
             file,
@@ -72,31 +112,39 @@ def save_manifest(manifest):
 
 def get_supported_files():
     """
-    Return supported files from data/raw.
+    Return supported files from
+    the configured raw-data directory.
     """
 
-    supported_extensions = {
-        ".txt",
-        ".pdf",
-        ".docx",
-    }
+    if not RAW_DATA_FOLDER.exists():
+
+        raise FileNotFoundError(
+            f"Raw data directory not found: "
+            f"{RAW_DATA_FOLDER}"
+        )
 
     files = []
 
-    for file_path in RAW_DATA_FOLDER.iterdir():
+    for file_path in (
+        RAW_DATA_FOLDER.iterdir()
+    ):
 
         if not file_path.is_file():
             continue
 
         if (
             file_path.suffix.lower()
-            not in supported_extensions
+            not in SUPPORTED_EXTENSIONS
         ):
             continue
 
-        files.append(file_path)
+        files.append(
+            file_path
+        )
 
-    return files
+    return sorted(
+        files
+    )
 
 
 def delete_source_chunks(
@@ -104,7 +152,8 @@ def delete_source_chunks(
     source_name,
 ):
     """
-    Delete all chunks belonging to one source file.
+    Delete every Chroma chunk belonging
+    to a particular source file.
     """
 
     existing = vector_store.get(
@@ -113,18 +162,30 @@ def delete_source_chunks(
         }
     )
 
-    ids = existing.get("ids", [])
+    ids = existing.get(
+        "ids",
+        [],
+    )
 
-    if ids:
-
-        vector_store.delete(
-            ids=ids
-        )
+    if not ids:
 
         print(
-            f"Deleted {len(ids)} old chunks "
+            f"No existing chunks found "
             f"for: {source_name}"
         )
+
+        return 0
+
+    vector_store.delete(
+        ids=ids
+    )
+
+    print(
+        f"Deleted {len(ids)} old chunks "
+        f"for: {source_name}"
+    )
+
+    return len(ids)
 
 
 def ingest_file(
@@ -132,7 +193,8 @@ def ingest_file(
     file_path,
 ):
     """
-    Load, chunk, and ingest one file.
+    Load, chunk, and ingest one file
+    into the vector store.
     """
 
     documents = load_document(
@@ -147,7 +209,9 @@ def ingest_file(
         return 0
 
     ids = [
-        chunk.metadata["chunk_id"]
+        chunk.metadata[
+            "chunk_id"
+        ]
         for chunk in chunks
     ]
 
@@ -161,37 +225,55 @@ def ingest_file(
 
 def run_incremental_ingestion():
     """
-    Incremental ingestion workflow.
+    Synchronize the configured source folder
+    with the Chroma vector database.
 
     New file:
         ingest
 
     Changed file:
-        delete old chunks
-        ingest new chunks
+        delete old source chunks
+        ingest updated chunks
 
     Unchanged file:
         skip
 
     Deleted file:
-        remove old chunks from Chroma
+        remove old source chunks
     """
 
     print(
         "\nStarting incremental ingestion..."
     )
 
-    vector_store = create_vector_store()
+    print(
+        "Raw data directory:",
+        RAW_DATA_FOLDER,
+    )
 
-    old_manifest = load_manifest()
+    print(
+        "Manifest path:",
+        MANIFEST_PATH,
+    )
 
-    current_files = get_supported_files()
+    vector_store = (
+        create_vector_store()
+    )
+
+    old_manifest = (
+        load_manifest()
+    )
+
+    current_files = (
+        get_supported_files()
+    )
 
     current_manifest = {}
 
     current_file_names = {
         file_path.name
-        for file_path in current_files
+        for file_path
+        in current_files
     }
 
 
@@ -199,7 +281,9 @@ def run_incremental_ingestion():
     # Detect deleted files
     # --------------------------------------------------
 
-    for old_source in old_manifest:
+    for old_source in (
+        old_manifest
+    ):
 
         if (
             old_source
@@ -218,15 +302,21 @@ def run_incremental_ingestion():
 
 
     # --------------------------------------------------
-    # Process current files
+    # Process files currently on disk
     # --------------------------------------------------
 
-    for file_path in current_files:
+    for file_path in (
+        current_files
+    ):
 
-        source_name = file_path.name
+        source_name = (
+            file_path.name
+        )
 
-        file_hash = calculate_file_hash(
-            file_path
+        file_hash = (
+            calculate_file_hash(
+                file_path
+            )
         )
 
         current_manifest[
@@ -250,13 +340,16 @@ def run_incremental_ingestion():
                 f"{source_name}"
             )
 
-            chunk_count = ingest_file(
-                vector_store,
-                file_path,
+            chunk_count = (
+                ingest_file(
+                    vector_store,
+                    file_path,
+                )
             )
 
             print(
-                f"Ingested {chunk_count} chunks."
+                f"Ingested "
+                f"{chunk_count} chunks."
             )
 
             continue
@@ -269,7 +362,9 @@ def run_incremental_ingestion():
         old_hash = (
             old_manifest[
                 source_name
-            ].get("hash")
+            ].get(
+                "hash"
+            )
         )
 
 
@@ -277,7 +372,10 @@ def run_incremental_ingestion():
         # Unchanged file
         # --------------------------------------------------
 
-        if old_hash == file_hash:
+        if (
+            old_hash
+            == file_hash
+        ):
 
             print(
                 f"\nUnchanged: "
@@ -305,13 +403,16 @@ def run_incremental_ingestion():
             source_name,
         )
 
-        chunk_count = ingest_file(
-            vector_store,
-            file_path,
+        chunk_count = (
+            ingest_file(
+                vector_store,
+                file_path,
+            )
         )
 
         print(
-            f"Ingested {chunk_count} "
+            f"Ingested "
+            f"{chunk_count} "
             f"updated chunks."
         )
 
@@ -325,7 +426,13 @@ def run_incremental_ingestion():
     )
 
 
-    stored = vector_store.get()
+    # --------------------------------------------------
+    # Final vector-store status
+    # --------------------------------------------------
+
+    stored = (
+        vector_store.get()
+    )
 
     print(
         "\nIncremental ingestion complete."
@@ -333,7 +440,9 @@ def run_incremental_ingestion():
 
     print(
         "Total records in Chroma:",
-        len(stored["ids"]),
+        len(
+            stored["ids"]
+        ),
     )
 
 

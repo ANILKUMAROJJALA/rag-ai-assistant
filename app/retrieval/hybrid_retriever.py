@@ -3,6 +3,13 @@ from langchain_core.documents import Document
 
 from app.retrieval.retriever import create_vector_store
 
+from app.config import (
+    VECTOR_TOP_K,
+    BM25_TOP_K,
+    HYBRID_FINAL_K,
+    RRF_K,
+)
+
 
 # --------------------------------------------------
 # Basic tokenizer
@@ -23,8 +30,8 @@ def document_key(document):
     """
     Create a unique key for each chunk.
 
-    This helps us merge the same chunk returned
-    by vector search and BM25 search.
+    This allows the same chunk returned by
+    vector search and BM25 to be merged correctly.
     """
 
     metadata = document.metadata
@@ -37,7 +44,7 @@ def document_key(document):
 
 
 # --------------------------------------------------
-# Get all corpus documents from Chroma
+# Get corpus documents from Chroma
 # --------------------------------------------------
 
 def get_corpus_documents(
@@ -47,7 +54,7 @@ def get_corpus_documents(
     Load indexed chunks directly from Chroma.
 
     If metadata_filter is supplied,
-    BM25 only searches inside that scope.
+    BM25 searches only within that scope.
     """
 
     vector_store = create_vector_store()
@@ -95,11 +102,17 @@ def get_corpus_documents(
 def bm25_search(
     query,
     metadata_filter=None,
-    k=5,
+    k=None,
 ):
     """
     Retrieve documents using BM25 keyword search.
+
+    If k is not supplied, BM25_TOP_K from
+    centralized configuration is used.
     """
+
+    if k is None:
+        k = BM25_TOP_K
 
     documents = get_corpus_documents(
         metadata_filter=metadata_filter
@@ -145,11 +158,17 @@ def bm25_search(
 def vector_search(
     query,
     metadata_filter=None,
-    k=5,
+    k=None,
 ):
     """
     Retrieve documents using semantic vector search.
+
+    If k is not supplied, VECTOR_TOP_K from
+    centralized configuration is used.
     """
+
+    if k is None:
+        k = VECTOR_TOP_K
 
     vector_store = create_vector_store()
 
@@ -178,19 +197,25 @@ def vector_search(
 def reciprocal_rank_fusion(
     vector_documents,
     bm25_documents,
-    rrf_k=60,
+    rrf_k=None,
 ):
     """
-    Combine vector search and BM25 rankings using
-    Reciprocal Rank Fusion.
+    Combine vector search and BM25 rankings
+    using Reciprocal Rank Fusion.
 
     Formula:
 
         RRF Score = 1 / (rrf_k + rank)
 
-    A document appearing in both search results
+    A document appearing in both result lists
     receives score contributions from both.
+
+    If rrf_k is not supplied, RRF_K from
+    centralized configuration is used.
     """
+
+    if rrf_k is None:
+        rrf_k = RRF_K
 
     scores = {}
     document_map = {}
@@ -253,9 +278,9 @@ def reciprocal_rank_fusion(
 def hybrid_retrieve_documents(
     query,
     metadata_filter=None,
-    vector_k=5,
-    bm25_k=5,
-    final_k=5,
+    vector_k=None,
+    bm25_k=None,
+    final_k=None,
 ):
     """
     Hybrid retrieval pipeline:
@@ -273,7 +298,19 @@ def hybrid_retrieve_documents(
     Reciprocal Rank Fusion
             ↓
        Top Candidates
+
+    Retrieval values come from centralized
+    configuration unless explicitly overridden.
     """
+
+    if vector_k is None:
+        vector_k = VECTOR_TOP_K
+
+    if bm25_k is None:
+        bm25_k = BM25_TOP_K
+
+    if final_k is None:
+        final_k = HYBRID_FINAL_K
 
     vector_documents = vector_search(
         query,
@@ -292,7 +329,9 @@ def hybrid_retrieve_documents(
         bm25_documents,
     )
 
-    return fused_documents[:final_k]
+    return fused_documents[
+        :final_k
+    ]
 
 
 # --------------------------------------------------
@@ -309,13 +348,22 @@ if __name__ == "__main__":
 
     for query in test_queries:
 
-        print("\n" + "=" * 70)
-        print(f"QUERY: {query}")
-        print("=" * 70)
+        print(
+            "\n" + "=" * 70
+        )
 
-        documents = hybrid_retrieve_documents(
-            query,
-            final_k=5,
+        print(
+            f"QUERY: {query}"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        documents = (
+            hybrid_retrieve_documents(
+                query
+            )
         )
 
         for index, document in enumerate(
@@ -323,7 +371,9 @@ if __name__ == "__main__":
             start=1,
         ):
 
-            metadata = document.metadata
+            metadata = (
+                document.metadata
+            )
 
             print(
                 f"\nRank {index}"
@@ -331,16 +381,22 @@ if __name__ == "__main__":
 
             print(
                 "Source:",
-                metadata.get("source"),
+                metadata.get(
+                    "source"
+                ),
             )
 
             print(
                 "Chunk:",
-                metadata.get("chunk_id"),
+                metadata.get(
+                    "chunk_id"
+                ),
             )
 
             if (
-                metadata.get("page_label")
+                metadata.get(
+                    "page_label"
+                )
                 is not None
             ):
 
@@ -353,5 +409,7 @@ if __name__ == "__main__":
 
             print(
                 "Text:",
-                document.page_content[:200],
+                document.page_content[
+                    :200
+                ],
             )

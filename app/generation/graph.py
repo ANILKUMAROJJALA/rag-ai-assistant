@@ -1,28 +1,42 @@
 from typing import TypedDict
 import sqlite3
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import (
+    StateGraph,
+    START,
+    END,
+)
+
+from langgraph.checkpoint.sqlite import (
+    SqliteSaver,
+)
+
+from app.config import (
+    RELEVANCE_THRESHOLD,
+    GENERATION_TOP_K,
+    CHECKPOINT_DATABASE,
+)
 
 from app.retrieval.hybrid_retriever import (
     hybrid_retrieve_documents,
 )
+
 from app.retrieval.retriever import (
     get_available_sources,
 )
+
 from app.retrieval.reranker import (
     create_reranker,
     rerank_documents,
 )
-from app.generation.llm import create_llm
-from app.generation.prompts import RAG_PROMPT
 
+from app.generation.llm import (
+    create_llm,
+)
 
-# --------------------------------------------------
-# Configuration
-# --------------------------------------------------
-
-RELEVANCE_THRESHOLD = 0.0
+from app.generation.prompts import (
+    RAG_PROMPT,
+)
 
 
 # --------------------------------------------------
@@ -30,6 +44,7 @@ RELEVANCE_THRESHOLD = 0.0
 # --------------------------------------------------
 
 reranker = create_reranker()
+
 llm = create_llm()
 
 
@@ -38,11 +53,13 @@ llm = create_llm()
 # --------------------------------------------------
 
 connection = sqlite3.connect(
-    "rag_checkpoints.sqlite",
+    CHECKPOINT_DATABASE,
     check_same_thread=False,
 )
 
-checkpointer = SqliteSaver(connection)
+checkpointer = SqliteSaver(
+    connection
+)
 
 
 # --------------------------------------------------
@@ -50,18 +67,25 @@ checkpointer = SqliteSaver(connection)
 # --------------------------------------------------
 
 class RAGState(TypedDict):
+
     question: str
+
     standalone_question: str
+
     conversation_history: list
 
     retrieved_documents: list
+
     reranked_documents: list
+
     reranker_scores: list
 
     answer: str
+
     sources: list
 
     route: str
+
     metadata_filter: dict
 
     retrieval_relevant: bool
@@ -71,12 +95,15 @@ class RAGState(TypedDict):
 # Route question
 # --------------------------------------------------
 
-def route_question_node(state: RAGState):
+def route_question_node(
+    state: RAGState,
+):
 
     routing_prompt = f"""
 Classify the user's message into exactly one category:
 
 rag
+
 direct
 
 Use "rag" when the user is asking a factual question
@@ -99,6 +126,7 @@ The retrieval relevance guard later decides whether
 the company documents contain enough evidence.
 
 User message:
+
 {state["question"]}
 
 Return only:
@@ -124,6 +152,7 @@ direct
         "rag",
         "direct",
     }:
+
         route = "rag"
 
     return {
@@ -131,15 +160,22 @@ direct
     }
 
 
-def choose_route(state: RAGState):
-    return state["route"]
+def choose_route(
+    state: RAGState,
+):
+
+    return state[
+        "route"
+    ]
 
 
 # --------------------------------------------------
 # Direct response
 # --------------------------------------------------
 
-def direct_response_node(state: RAGState):
+def direct_response_node(
+    state: RAGState,
+):
 
     prompt = f"""
 You are a helpful AI assistant.
@@ -148,6 +184,7 @@ Respond naturally and briefly to the user's
 conversational message.
 
 User:
+
 {state["question"]}
 """
 
@@ -185,7 +222,9 @@ User:
 # Rewrite conversational query
 # --------------------------------------------------
 
-def rewrite_query_node(state: RAGState):
+def rewrite_query_node(
+    state: RAGState,
+):
 
     history = state[
         "conversation_history"
@@ -231,7 +270,9 @@ Return only the rewritten standalone question.
 # Metadata filtering
 # --------------------------------------------------
 
-def metadata_filter_node(state: RAGState):
+def metadata_filter_node(
+    state: RAGState,
+):
 
     question = state[
         "standalone_question"
@@ -252,8 +293,13 @@ def metadata_filter_node(state: RAGState):
         }
 
 
+    # --------------------------------------------------
     # Exact filename fast path
-    for source in available_sources:
+    # --------------------------------------------------
+
+    for source in (
+        available_sources
+    ):
 
         if (
             source.lower()
@@ -267,7 +313,10 @@ def metadata_filter_node(state: RAGState):
             }
 
 
+    # --------------------------------------------------
     # Detect document-scoped intent
+    # --------------------------------------------------
+
     document_scope_phrases = [
         "use the",
         "use this",
@@ -315,7 +364,11 @@ def metadata_filter_node(state: RAGState):
     )
 
 
-    # Normal query: don't run metadata LLM
+    # --------------------------------------------------
+    # Normal query:
+    # don't run metadata-selection LLM
+    # --------------------------------------------------
+
     if (
         not has_scope_phrase
         and
@@ -327,7 +380,10 @@ def metadata_filter_node(state: RAGState):
         }
 
 
+    # --------------------------------------------------
     # Natural-language document mapping
+    # --------------------------------------------------
+
     sources_text = "\n".join(
         f"- {source}"
         for source
@@ -406,10 +462,12 @@ none
 
 
 # --------------------------------------------------
-# NEW: Hybrid retrieval
+# Hybrid retrieval
 # --------------------------------------------------
 
-def retrieve_node(state: RAGState):
+def retrieve_node(
+    state: RAGState,
+):
 
     documents = (
         hybrid_retrieve_documents(
@@ -420,12 +478,6 @@ def retrieve_node(state: RAGState):
             metadata_filter=state.get(
                 "metadata_filter"
             ),
-
-            vector_k=5,
-            bm25_k=5,
-
-            # Send more candidates to reranker
-            final_k=8,
         )
     )
 
@@ -439,7 +491,9 @@ def retrieve_node(state: RAGState):
 # Cross-encoder reranking
 # --------------------------------------------------
 
-def rerank_node(state: RAGState):
+def rerank_node(
+    state: RAGState,
+):
 
     ranked_documents = (
         rerank_documents(
@@ -515,6 +569,7 @@ def choose_relevance(
     if state[
         "retrieval_relevant"
     ]:
+
         return "relevant"
 
     return "irrelevant"
@@ -579,12 +634,14 @@ def format_context(
 # Grounded generation
 # --------------------------------------------------
 
-def generate_node(state: RAGState):
+def generate_node(
+    state: RAGState,
+):
 
     top_documents = (
         state[
             "reranked_documents"
-        ][:2]
+        ][:GENERATION_TOP_K]
     )
 
     context = format_context(
@@ -607,7 +664,9 @@ def generate_node(state: RAGState):
 
     sources = []
 
-    for document in top_documents:
+    for document in (
+        top_documents
+    ):
 
         metadata = (
             document.metadata
@@ -730,14 +789,20 @@ def build_graph():
     )
 
 
+    # --------------------------------------------------
     # Start
+    # --------------------------------------------------
+
     graph.add_edge(
         START,
         "route_question",
     )
 
 
+    # --------------------------------------------------
     # Conversation vs RAG
+    # --------------------------------------------------
+
     graph.add_conditional_edges(
         "route_question",
         choose_route,
@@ -756,7 +821,10 @@ def build_graph():
     )
 
 
+    # --------------------------------------------------
     # RAG pipeline
+    # --------------------------------------------------
+
     graph.add_edge(
         "rewrite_query",
         "metadata_filter",
@@ -778,7 +846,10 @@ def build_graph():
     )
 
 
+    # --------------------------------------------------
     # Relevant vs irrelevant
+    # --------------------------------------------------
+
     graph.add_conditional_edges(
         "relevance_guard",
         choose_relevance,
@@ -817,7 +888,7 @@ if __name__ == "__main__":
     config = {
         "configurable": {
             "thread_id":
-                "hybrid-rag-test-1"
+                "day4-config-test"
         }
     }
 
@@ -875,6 +946,7 @@ if __name__ == "__main__":
     print(
         "\nStandalone Question:"
     )
+
     print(
         result[
             "standalone_question"
@@ -884,6 +956,7 @@ if __name__ == "__main__":
     print(
         "\nMetadata Filter:"
     )
+
     print(
         result[
             "metadata_filter"
@@ -915,6 +988,7 @@ if __name__ == "__main__":
     print(
         "\nReranker Scores:"
     )
+
     print(
         result[
             "reranker_scores"
@@ -928,6 +1002,7 @@ if __name__ == "__main__":
         print(
             "\nTop Reranker Score:"
         )
+
         print(
             result[
                 "reranker_scores"
@@ -937,6 +1012,7 @@ if __name__ == "__main__":
     print(
         "\nRetrieval Relevant:"
     )
+
     print(
         result[
             "retrieval_relevant"
@@ -944,11 +1020,13 @@ if __name__ == "__main__":
     )
 
     print("\nAnswer:")
+
     print(
         result["answer"]
     )
 
     print("\nSources:")
+
     print(
         result["sources"]
     )
@@ -960,4 +1038,7 @@ if __name__ == "__main__":
     for message in result[
         "conversation_history"
     ]:
-        print(message)
+
+        print(
+            message
+        )

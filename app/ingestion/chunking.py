@@ -4,6 +4,11 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
+from app.config import (
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+)
+
 
 def create_stable_chunk_id(
     source,
@@ -11,9 +16,9 @@ def create_stable_chunk_id(
     text,
 ):
     """
-    Create a deterministic chunk ID.
+    Create a deterministic SHA-256 chunk ID.
 
-    The same source + page + chunk text
+    The same source, page, and text
     will always generate the same ID.
     """
 
@@ -28,14 +33,17 @@ def create_stable_chunk_id(
 
 def split_documents(documents):
     """
-    Split documents into chunks and assign
-    deterministic chunk IDs.
+    Split documents into chunks using
+    centralized application configuration.
+
+    Stable deterministic chunk IDs are
+    added to every chunk.
     """
 
     splitter = (
         RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
         )
     )
 
@@ -47,10 +55,9 @@ def split_documents(documents):
 
         source = chunk.metadata.get(
             "source",
-            "unknown"
+            "unknown",
         )
 
-        # Normalize Windows paths
         source = (
             source
             .replace("\\", "/")
@@ -61,8 +68,6 @@ def split_documents(documents):
             "source"
         ] = source
 
-
-        # PDF page information
         page = chunk.metadata.get(
             "page_label"
         )
@@ -73,7 +78,6 @@ def split_documents(documents):
                 0,
             )
 
-
         stable_id = (
             create_stable_chunk_id(
                 source=source,
@@ -82,11 +86,8 @@ def split_documents(documents):
             )
         )
 
-
-        # Store stable ID in metadata
         chunk.metadata[
             "chunk_id"
         ] = stable_id
-
 
     return chunks
