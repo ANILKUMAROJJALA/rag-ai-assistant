@@ -93,6 +93,31 @@ class FakeRAGApp:
 
 
 # --------------------------------------------------
+# Pytest fixture
+# --------------------------------------------------
+
+@pytest.fixture
+def mocked_rag_app():
+    """
+    Override the real RAG dependency with a
+    deterministic fake RAG application.
+
+    The override is automatically removed
+    after the test finishes.
+    """
+
+    fake_rag_app = FakeRAGApp()
+
+    app.dependency_overrides[
+        get_rag_app
+    ] = lambda: fake_rag_app
+
+    yield fake_rag_app
+
+    app.dependency_overrides.clear()
+
+
+# --------------------------------------------------
 # Fast API tests
 # --------------------------------------------------
 
@@ -140,82 +165,72 @@ def test_empty_question_validation():
 # Mocked chat API test
 # --------------------------------------------------
 
-def test_chat_with_mocked_rag():
+def test_chat_with_mocked_rag(
+    mocked_rag_app,
+):
     """
     The /chat endpoint should correctly
     process and serialize a mocked
     LangGraph response.
     """
 
-    fake_rag_app = FakeRAGApp()
+    response = client.post(
+        "/chat",
+        json={
+            "question":
+                "What does NovaSearch do?",
 
-    app.dependency_overrides[
-        get_rag_app
-    ] = lambda: fake_rag_app
+            "thread_id":
+                "mock-test-thread",
+        },
+    )
 
-    try:
+    assert (
+        response.status_code
+        == 200
+    )
 
-        response = client.post(
-            "/chat",
-            json={
-                "question":
-                    "What does NovaSearch do?",
+    data = response.json()
 
-                "thread_id":
-                    "mock-test-thread",
-            },
-        )
+    assert (
+        data["question"]
+        == "What does NovaSearch do?"
+    )
 
-        assert (
-            response.status_code
-            == 200
-        )
+    assert (
+        data["answer"]
+        == "Mocked NovaSearch answer."
+    )
 
-        data = response.json()
+    assert (
+        data["thread_id"]
+        == "mock-test-thread"
+    )
 
-        assert (
-            data["question"]
-            == "What does NovaSearch do?"
-        )
+    assert (
+        data["route"]
+        == "rag"
+    )
 
-        assert (
-            data["answer"]
-            == "Mocked NovaSearch answer."
-        )
+    assert (
+        data["retrieval_relevant"]
+        is True
+    )
 
-        assert (
-            data["thread_id"]
-            == "mock-test-thread"
-        )
+    assert (
+        data["standalone_question"]
+        == "What does NovaSearch do?"
+    )
 
-        assert (
-            data["route"]
-            == "rag"
-        )
+    assert (
+        len(data["sources"])
+        == 1
+    )
 
-        assert (
-            data["retrieval_relevant"]
-            is True
-        )
-
-        assert (
-            data["standalone_question"]
-            == "What does NovaSearch do?"
-        )
-
-        assert (
-            len(data["sources"])
-            == 1
-        )
-
-        assert (
-            data["sources"][0]["source"]
-            == "product_guide.docx"
-        )
-
-    finally:
-
-        app.dependency_overrides.clear()
+    assert (
+        data["sources"][0]["source"]
+        == "product_guide.docx"
+    )
 
 
 # --------------------------------------------------
