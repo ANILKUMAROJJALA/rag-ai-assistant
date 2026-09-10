@@ -1,4 +1,7 @@
+from functools import lru_cache
+
 from fastapi import (
+    Depends,
     FastAPI,
     HTTPException,
 )
@@ -6,10 +9,6 @@ from fastapi import (
 from app.api.schemas import (
     ChatRequest,
     ChatResponse,
-)
-
-from app.generation.graph import (
-    build_graph,
 )
 
 
@@ -28,10 +27,27 @@ app = FastAPI(
 
 
 # --------------------------------------------------
-# Build LangGraph application
+# RAG application dependency
 # --------------------------------------------------
 
-rag_app = build_graph()
+@lru_cache(maxsize=1)
+def get_rag_app():
+    """
+    Lazily import and build the LangGraph
+    RAG application.
+
+    This prevents expensive RAG modules from
+    loading when endpoints such as /health
+    are being used or tested.
+
+    The graph is created only on the first
+    request that actually needs it, then the
+    same instance is reused.
+    """
+
+    from app.generation.graph import build_graph
+
+    return build_graph()
 
 
 # --------------------------------------------------
@@ -78,7 +94,7 @@ def create_initial_state(
             {},
 
         "retrieval_relevant":
-            False,
+            None,
     }
 
 
@@ -130,6 +146,7 @@ def health_check():
 )
 def chat(
     request: ChatRequest,
+    rag_app=Depends(get_rag_app),
 ):
     """
     Send a user question to the
