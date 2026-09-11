@@ -6,9 +6,11 @@ import {
 
 import "./App.css";
 
+
 const API_URL =
   import.meta.env.VITE_API_URL
   || "http://127.0.0.1:8000";
+
 
 const ACCENT_PRESETS = [
   {
@@ -37,9 +39,12 @@ const ACCENT_PRESETS = [
 function createWelcomeMessage() {
   return {
     id: crypto.randomUUID(),
+
     role: "assistant",
+
     content:
       "Hi! I’m your RAG AI Assistant. Ask me a question about the documents in the knowledge base.",
+
     sources: [],
   };
 }
@@ -51,47 +56,61 @@ function App() {
   // Chat state
   // --------------------------------------------------
 
-  const [input, setInput] = useState("");
+  const [input, setInput] =
+    useState("");
 
-  const [messages, setMessages] = useState([
-    createWelcomeMessage(),
-  ]);
+  const [messages, setMessages] =
+    useState([
+      createWelcomeMessage(),
+    ]);
 
-  const [threadId, setThreadId] = useState(
-    () => crypto.randomUUID()
-  );
+  const [threadId, setThreadId] =
+    useState(
+      () => crypto.randomUUID()
+    );
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
-  const [error, setError] = useState("");
+  const [error, setError] =
+    useState("");
 
 
   // --------------------------------------------------
   // Theme state
   // --------------------------------------------------
 
-  const [showThemePanel, setShowThemePanel] =
-    useState(false);
+  const [
+    showThemePanel,
+    setShowThemePanel,
+  ] = useState(false);
 
-  const [accentColor, setAccentColor] =
-    useState(() => {
+  const [
+    accentColor,
+    setAccentColor,
+  ] = useState(() => {
 
-      const savedColor =
-        localStorage.getItem(
-          "rag-accent-color"
-        );
+    const savedColor =
+      localStorage.getItem(
+        "rag-accent-color"
+      );
 
-      return savedColor || "#2563eb";
-    });
+    return (
+      savedColor
+      || "#2563eb"
+    );
+  });
 
 
   // --------------------------------------------------
   // Refs
   // --------------------------------------------------
 
-  const bottomRef = useRef(null);
+  const bottomRef =
+    useRef(null);
 
-  const themePanelRef = useRef(null);
+  const themePanelRef =
+    useRef(null);
 
 
   // --------------------------------------------------
@@ -105,10 +124,12 @@ function App() {
       accentColor
     );
 
-    document.documentElement.style.setProperty(
-      "--accent",
-      accentColor
-    );
+    document.documentElement
+      .style
+      .setProperty(
+        "--accent",
+        accentColor
+      );
 
   }, [accentColor]);
 
@@ -119,11 +140,16 @@ function App() {
 
   useEffect(() => {
 
-    bottomRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
+    bottomRef.current
+      ?.scrollIntoView({
+        behavior: "smooth",
+      });
 
-  }, [messages, loading, error]);
+  }, [
+    messages,
+    loading,
+    error,
+  ]);
 
 
   // --------------------------------------------------
@@ -132,17 +158,21 @@ function App() {
 
   useEffect(() => {
 
-    function handleOutsideClick(event) {
+    function handleOutsideClick(
+      event
+    ) {
 
       if (
         themePanelRef.current
-        && !themePanelRef.current.contains(
-          event.target
-        )
+        && !themePanelRef.current
+          .contains(
+            event.target
+          )
       ) {
 
-        setShowThemePanel(false);
-
+        setShowThemePanel(
+          false
+        );
       }
     }
 
@@ -159,7 +189,6 @@ function App() {
         "mousedown",
         handleOutsideClick
       );
-
     };
 
   }, []);
@@ -171,25 +200,38 @@ function App() {
 
   async function handleSend() {
 
-    const trimmedInput = input.trim();
+    const trimmedInput =
+      input.trim();
 
-    if (!trimmedInput || loading) {
+
+    if (
+      !trimmedInput
+      || loading
+    ) {
       return;
     }
 
 
     const userMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmedInput,
+      id:
+        crypto.randomUUID(),
+
+      role:
+        "user",
+
+      content:
+        trimmedInput,
+
       sources: [],
     };
 
 
-    setMessages((previousMessages) => [
-      ...previousMessages,
-      userMessage,
-    ]);
+    setMessages(
+      (previousMessages) => [
+        ...previousMessages,
+        userMessage,
+      ]
+    );
 
 
     setInput("");
@@ -201,58 +243,127 @@ function App() {
 
     try {
 
-      const response = await fetch(
-            `${API_URL}/chat`,
-        {
-          method: "POST",
+      const response =
+        await fetch(
+          `${API_URL}/chat`,
+          {
+            method:
+              "POST",
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-          body: JSON.stringify({
-            question: trimmedInput,
-            thread_id: threadId,
-          }),
-        }
-      );
+            body:
+              JSON.stringify({
+                question:
+                  trimmedInput,
 
+                thread_id:
+                  threadId,
+              }),
+          }
+        );
+
+
+      // --------------------------------------------------
+      // Backend returned an HTTP error
+      // --------------------------------------------------
 
       if (!response.ok) {
 
-        throw new Error(
-          `Request failed with status ${response.status}`
-        );
+        let errorMessage =
+          "The assistant could not process your request.";
 
+
+        try {
+
+          const errorData =
+            await response.json();
+
+
+          if (
+            errorData.detail
+          ) {
+
+            errorMessage =
+              errorData.detail;
+          }
+
+        } catch {
+
+          // The backend did not return JSON.
+          // Keep the safe fallback message.
+        }
+
+
+        throw new Error(
+          errorMessage
+        );
       }
 
 
-      const data = await response.json();
+      // --------------------------------------------------
+      // Parse successful response
+      // --------------------------------------------------
 
+      const data =
+        await response.json();
+
+
+      // --------------------------------------------------
+      // Validate expected response
+      // --------------------------------------------------
+
+      if (!data.answer) {
+
+        throw new Error(
+          "The server returned an invalid response."
+        );
+      }
+
+
+      // --------------------------------------------------
+      // Create assistant message
+      // --------------------------------------------------
 
       const assistantMessage = {
-        id: crypto.randomUUID(),
+        id:
+          crypto.randomUUID(),
 
-        role: "assistant",
+        role:
+          "assistant",
 
-        content: data.answer,
+        content:
+          data.answer,
 
-        sources: data.sources || [],
+        sources:
+          data.sources || [],
 
-        route: data.route,
+        route:
+          data.route,
 
         retrievalRelevant:
           data.retrieval_relevant,
       };
 
 
-      setMessages((previousMessages) => [
-        ...previousMessages,
-        assistantMessage,
-      ]);
+      // --------------------------------------------------
+      // Add assistant message
+      // --------------------------------------------------
 
-    } catch (requestError) {
+      setMessages(
+        (previousMessages) => [
+          ...previousMessages,
+          assistantMessage,
+        ]
+      );
+
+
+    } catch (
+      requestError
+    ) {
 
       console.error(
         "Chat request failed:",
@@ -261,13 +372,16 @@ function App() {
 
 
       setError(
-        "Unable to reach the RAG assistant. Make sure the FastAPI server is running."
+        requestError.message
+        || "Unable to reach the RAG assistant."
       );
+
 
     } finally {
 
-      setLoading(false);
-
+      setLoading(
+        false
+      );
     }
   }
 
@@ -276,7 +390,9 @@ function App() {
   // Keyboard handling
   // --------------------------------------------------
 
-  function handleKeyDown(event) {
+  function handleKeyDown(
+    event
+  ) {
 
     if (
       event.key === "Enter"
@@ -287,7 +403,6 @@ function App() {
       event.preventDefault();
 
       handleSend();
-
     }
   }
 
@@ -302,15 +417,19 @@ function App() {
       crypto.randomUUID()
     );
 
+
     setMessages([
       createWelcomeMessage(),
     ]);
+
 
     setInput("");
 
     setError("");
 
-    setLoading(false);
+    setLoading(
+      false
+    );
   }
 
 
@@ -365,7 +484,9 @@ function App() {
 
           <div className="status-pill">
 
-            <span className="status-dot" />
+            <span
+              className="status-dot"
+            />
 
             Backend connected
 
@@ -381,9 +502,12 @@ function App() {
 
             <button
               className="theme-button"
+
               onClick={() =>
                 setShowThemePanel(
-                  (previousValue) =>
+                  (
+                    previousValue
+                  ) =>
                     !previousValue
                 )
               }
@@ -430,13 +554,18 @@ function App() {
                     (preset) => (
 
                       <button
-                        key={preset.value}
+                        key={
+                          preset.value
+                        }
 
                         type="button"
 
                         className={
-                          accentColor === preset.value
+                          accentColor
+                          === preset.value
+
                             ? "theme-option active"
+
                             : "theme-option"
                         }
 
@@ -449,11 +578,13 @@ function App() {
 
                         <span
                           className="theme-swatch"
+
                           style={{
                             backgroundColor:
                               preset.value,
                           }}
                         />
+
 
                         <span>
                           {preset.name}
@@ -488,21 +619,28 @@ function App() {
 
                     <span
                       className="selected-color-preview"
+
                       style={{
                         backgroundColor:
                           accentColor,
                       }}
                     />
 
+
                     <input
                       type="color"
 
-                      value={accentColor}
+                      value={
+                        accentColor
+                      }
 
-                      onChange={(event) =>
-                        setAccentColor(
-                          event.target.value
-                        )
+                      onChange={
+                        (event) =>
+                          setAccentColor(
+                            event
+                              .target
+                              .value
+                          )
                       }
 
                       aria-label="Choose custom accent color"
@@ -520,7 +658,10 @@ function App() {
                   </span>
 
                   <code>
-                    {accentColor.toUpperCase()}
+                    {
+                      accentColor
+                        .toUpperCase()
+                    }
                   </code>
 
                 </div>
@@ -528,7 +669,10 @@ function App() {
 
                 <button
                   className="reset-theme-button"
-                  onClick={handleResetTheme}
+
+                  onClick={
+                    handleResetTheme
+                  }
                 >
                   Reset to default
                 </button>
@@ -542,7 +686,10 @@ function App() {
 
           <button
             className="new-chat-button"
-            onClick={handleNewChat}
+
+            onClick={
+              handleNewChat
+            }
           >
             New Chat
           </button>
@@ -591,115 +738,161 @@ function App() {
 
           <div className="chat-body">
 
-            {messages.map((message) => (
-
-              <div
-                key={message.id}
-
-                className={
-                  message.role === "user"
-                    ? "message-row user-row"
-                    : "message-row assistant-row"
-                }
-              >
-
-                <div className="avatar">
-
-                  {message.role === "user"
-                    ? "U"
-                    : "AI"}
-
-                </div>
-
+            {messages.map(
+              (message) => (
 
                 <div
+                  key={
+                    message.id
+                  }
+
                   className={
-                    message.role === "user"
-                      ? "message-card user-card"
-                      : "message-card assistant-card"
+                    message.role
+                    === "user"
+
+                      ? "message-row user-row"
+
+                      : "message-row assistant-row"
                   }
                 >
 
-                  <div className="message-meta">
+                  <div className="avatar">
 
-                    {message.role === "user"
-                      ? "You"
-                      : "Assistant"}
+                    {
+                      message.role
+                      === "user"
 
-                  </div>
+                        ? "U"
 
-
-                  <div className="message-content">
-
-                    {message.content}
+                        : "AI"
+                    }
 
                   </div>
 
 
-                  {/* Sources */}
+                  <div
+                    className={
+                      message.role
+                      === "user"
 
-                  {message.sources.length > 0 && (
+                        ? "message-card user-card"
 
-                    <div className="sources-section">
+                        : "message-card assistant-card"
+                    }
+                  >
 
-                      <div className="sources-heading">
+                    <div className="message-meta">
 
-                        <span>
-                          Sources
-                        </span>
+                      {
+                        message.role
+                        === "user"
 
-                        <span className="sources-count">
-                          {message.sources.length}
-                        </span>
+                          ? "You"
 
-                      </div>
-
-
-                      <div className="source-list">
-
-                        {message.sources.map(
-                          (source, index) => (
-
-                            <div
-                              key={
-                                `${source.source}-${index}`
-                              }
-
-                              className="source-chip"
-                            >
-
-                              <span className="source-icon">
-                                DOC
-                              </span>
-
-
-                              <span className="source-name">
-
-                                {source.source
-                                  || "Unknown source"}
-
-                                {source.page
-                                  ? ` · page ${source.page}`
-                                  : ""}
-
-                              </span>
-
-                            </div>
-
-                          )
-                        )}
-
-                      </div>
+                          : "Assistant"
+                      }
 
                     </div>
 
-                  )}
+
+                    <div className="message-content">
+
+                      {
+                        message.content
+                      }
+
+                    </div>
+
+
+                    {/* Sources */}
+
+                    {
+                      message
+                        .sources
+                        .length > 0
+                      && (
+
+                        <div className="sources-section">
+
+                          <div className="sources-heading">
+
+                            <span>
+                              Sources
+                            </span>
+
+                            <span className="sources-count">
+
+                              {
+                                message
+                                  .sources
+                                  .length
+                              }
+
+                            </span>
+
+                          </div>
+
+
+                          <div className="source-list">
+
+                            {
+                              message
+                                .sources
+                                .map(
+                                  (
+                                    source,
+                                    index
+                                  ) => (
+
+                                    <div
+                                      key={
+                                        `${source.source}-${index}`
+                                      }
+
+                                      className="source-chip"
+                                    >
+
+                                      <span className="source-icon">
+                                        DOC
+                                      </span>
+
+
+                                      <span className="source-name">
+
+                                        {
+                                          source
+                                            .source
+                                          || "Unknown source"
+                                        }
+
+
+                                        {
+                                          source.page
+                                            ? ` · page ${source.page}`
+                                            : ""
+                                        }
+
+                                      </span>
+
+                                    </div>
+
+                                  )
+                                )
+                            }
+
+                          </div>
+
+                        </div>
+
+                      )
+                    }
+
+                  </div>
 
                 </div>
 
-              </div>
-
-            ))}
+              )
+            )}
 
 
             {/* ------------------------------------------------
@@ -755,8 +948,9 @@ function App() {
               <div className="error-card">
 
                 <div className="error-title">
-                  Connection error
+                  Request failed
                 </div>
+
 
                 <div>
                   {error}
@@ -767,7 +961,11 @@ function App() {
             )}
 
 
-            <div ref={bottomRef} />
+            <div
+              ref={
+                bottomRef
+              }
+            />
 
           </div>
 
@@ -781,23 +979,34 @@ function App() {
             <div className="composer-box">
 
               <textarea
-                value={input}
+                value={
+                  input
+                }
 
                 placeholder={
                   loading
+
                     ? "Waiting for response..."
+
                     : "Ask a question about your documents..."
                 }
 
-                onChange={(event) =>
-                  setInput(
-                    event.target.value
-                  )
+                onChange={
+                  (event) =>
+                    setInput(
+                      event
+                        .target
+                        .value
+                    )
                 }
 
-                onKeyDown={handleKeyDown}
+                onKeyDown={
+                  handleKeyDown
+                }
 
-                disabled={loading}
+                disabled={
+                  loading
+                }
 
                 rows={1}
               />
@@ -806,7 +1015,9 @@ function App() {
               <button
                 className="send-button"
 
-                onClick={handleSend}
+                onClick={
+                  handleSend
+                }
 
                 disabled={
                   loading
@@ -814,9 +1025,11 @@ function App() {
                 }
               >
 
-                {loading
-                  ? "..."
-                  : "Send"}
+                {
+                  loading
+                    ? "..."
+                    : "Send"
+                }
 
               </button>
 
@@ -829,9 +1042,11 @@ function App() {
                 Enter to send
               </span>
 
+
               <span className="footer-divider">
                 •
               </span>
+
 
               <span>
                 Shift + Enter for a new line

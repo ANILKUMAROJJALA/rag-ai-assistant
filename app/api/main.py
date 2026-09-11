@@ -1,3 +1,5 @@
+import logging
+
 from functools import lru_cache
 
 from fastapi import (
@@ -17,6 +19,13 @@ from app.api.schemas import (
 
 
 # --------------------------------------------------
+# Logger
+# --------------------------------------------------
+
+logger = logging.getLogger("uvicorn.error")
+
+
+# --------------------------------------------------
 # FastAPI application
 # --------------------------------------------------
 
@@ -31,7 +40,7 @@ app = FastAPI(
 
 
 # --------------------------------------------------
-# CORS configuration
+# CORS
 # --------------------------------------------------
 
 app.add_middleware(
@@ -63,14 +72,6 @@ def get_rag_app():
     """
     Lazily import and build the LangGraph
     RAG application.
-
-    This prevents expensive RAG modules from
-    loading when endpoints such as /health
-    are being used or tested.
-
-    The graph is created only on the first
-    request that actually needs it, then the
-    same instance is reused.
     """
 
     from app.generation.graph import build_graph
@@ -79,50 +80,24 @@ def get_rag_app():
 
 
 # --------------------------------------------------
-# Initial state
+# Initial LangGraph state
 # --------------------------------------------------
 
 def create_initial_state(
     question: str,
 ):
-    """
-    Create the complete LangGraph state
-    for a brand-new conversation.
-    """
-
     return {
-        "question":
-            question,
-
-        "standalone_question":
-            "",
-
-        "conversation_history":
-            [],
-
-        "retrieved_documents":
-            [],
-
-        "reranked_documents":
-            [],
-
-        "reranker_scores":
-            [],
-
-        "answer":
-            "",
-
-        "sources":
-            [],
-
-        "route":
-            "",
-
-        "metadata_filter":
-            {},
-
-        "retrieval_relevant":
-            None,
+        "question": question,
+        "standalone_question": "",
+        "conversation_history": [],
+        "retrieved_documents": [],
+        "reranked_documents": [],
+        "reranker_scores": [],
+        "answer": "",
+        "sources": [],
+        "route": "",
+        "metadata_filter": {},
+        "retrieval_relevant": None,
     }
 
 
@@ -132,19 +107,11 @@ def create_initial_state(
 
 @app.get("/")
 def root():
-
     return {
-        "message":
-            "RAG AI Assistant API",
-
-        "docs":
-            "/docs",
-
-        "health":
-            "/health",
-
-        "chat":
-            "/chat",
+        "message": "RAG AI Assistant API",
+        "docs": "/docs",
+        "health": "/health",
+        "chat": "/chat",
     }
 
 
@@ -154,13 +121,9 @@ def root():
 
 @app.get("/health")
 def health_check():
-
     return {
-        "status":
-            "healthy",
-
-        "service":
-            "RAG AI Assistant",
+        "status": "healthy",
+        "service": "RAG AI Assistant",
     }
 
 
@@ -176,25 +139,39 @@ def chat(
     request: ChatRequest,
     rag_app=Depends(get_rag_app),
 ):
-    """
-    Send a user question to the
-    LangGraph RAG pipeline.
-    """
+
+    # Log the start of the request.
+    #
+    # We intentionally log the thread ID
+    # instead of the user's question because
+    # the question may contain private data.
+
+    logger.info(
+        "Chat request received: thread_id=%s",
+        request.thread_id,
+    )
+
 
     try:
 
+        # --------------------------------------------------
+        # LangGraph configuration
+        # --------------------------------------------------
         config = {
             "configurable": {
-                "thread_id":
-                    request.thread_id
+                "thread_id": request.thread_id
             }
         }
 
-        snapshot = (
-            rag_app.get_state(
-                config
-            )
+
+        # --------------------------------------------------
+        # Check existing conversation state
+        # --------------------------------------------------
+
+        snapshot = rag_app.get_state(
+            config
         )
+
 
         existing_state = (
             snapshot.values
@@ -202,68 +179,100 @@ def chat(
             else {}
         )
 
+
+        # --------------------------------------------------
+        # Prepare graph input
+        # --------------------------------------------------
+
         if not existing_state:
 
-            graph_input = (
-                create_initial_state(
-                    request.question
-                )
+            graph_input = create_initial_state(
+                request.question
             )
 
         else:
 
+            # For an existing thread, LangGraph's
+            # checkpoint already contains the
+            # conversation state.
+            #
+            # Therefore we only provide the new
+            # question.
+
             graph_input = {
-                "question":
-                    request.question
+                "question": request.question
             }
 
-        result = (
-            rag_app.invoke(
-                graph_input,
-                config=config,
-            )
+
+        # --------------------------------------------------
+        # Execute LangGraph
+        # --------------------------------------------------
+
+        result = rag_app.invoke(
+            graph_input,
+            config=config,
         )
+
+
+        # --------------------------------------------------
+        # Log successful completion
+        # --------------------------------------------------
+
+        logger.info(
+            (
+                "Chat request completed: "
+                "thread_id=%s route=%s relevant=%s"
+            ),
+            request.thread_id,
+            result.get("route"),
+            result.get(
+                "retrieval_relevant"
+            ),
+        )
+
+
+        # --------------------------------------------------
+        # API response
+        # --------------------------------------------------
 
         return ChatResponse(
-            question=
-                request.question,
+            question=request.question,
 
-            answer=
-                result[
-                    "answer"
-                ],
+            answer=result["answer"],
 
-            thread_id=
-                request.thread_id,
+            thread_id=request.thread_id,
 
-            route=
-                result[
-                    "route"
-                ],
+            route=result["route"],
 
-            retrieval_relevant=
-                result.get(
-                    "retrieval_relevant"
-                ),
+            retrieval_relevant=result.get(
+                "retrieval_relevant"
+            ),
 
-            standalone_question=
-                result.get(
-                    "standalone_question"
-                ),
+            standalone_question=result.get(
+                "standalone_question"
+            ),
 
-            sources=
-                result.get(
-                    "sources",
-                    [],
-                ),
+            sources=result.get(
+                "sources",
+                [],
+            ),
         )
 
-    except Exception as error:
 
-        print(
-            "Chat endpoint error:",
-            error,
+    # --------------------------------------------------
+    # Error handling
+    # --------------------------------------------------
+
+    except Exception:
+
+        logger.exception(
+            (
+                "Chat endpoint failed: "
+                "thread_id=%s"
+            ),
+            request.thread_id,
         )
+
 
         raise HTTPException(
             status_code=500,
@@ -271,4 +280,4 @@ def chat(
                 "The RAG assistant failed "
                 "to process the request."
             ),
-        ) from error
+        )
