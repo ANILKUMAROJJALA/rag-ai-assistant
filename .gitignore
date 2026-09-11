@@ -4,4 +4,6 @@ __pycache__/
 *.pyc
 chroma_db/
 .vscode/
-rag_checkpoints.sqlite
+rag_checkpoints.sqlite-shm
+rag_checkpoints.sqlite-wal
+rag_checkpoints.sqlite*

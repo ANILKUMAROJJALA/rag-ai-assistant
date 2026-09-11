@@ -6,6 +6,10 @@ from fastapi import (
     HTTPException,
 )
 
+from fastapi.middleware.cors import (
+    CORSMiddleware,
+)
+
 from app.api.schemas import (
     ChatRequest,
     ChatResponse,
@@ -23,6 +27,30 @@ app = FastAPI(
         "RAG AI Assistant."
     ),
     version="1.0.0",
+)
+
+
+# --------------------------------------------------
+# CORS configuration
+# --------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+
+    allow_credentials=True,
+
+    allow_methods=[
+        "*"
+    ],
+
+    allow_headers=[
+        "*"
+    ],
 )
 
 
@@ -162,11 +190,6 @@ def chat(
             }
         }
 
-
-        # --------------------------------------------------
-        # Check existing conversation state
-        # --------------------------------------------------
-
         snapshot = (
             rag_app.get_state(
                 config
@@ -179,11 +202,6 @@ def chat(
             else {}
         )
 
-
-        # --------------------------------------------------
-        # New conversation
-        # --------------------------------------------------
-
         if not existing_state:
 
             graph_input = (
@@ -192,11 +210,6 @@ def chat(
                 )
             )
 
-
-        # --------------------------------------------------
-        # Existing conversation
-        # --------------------------------------------------
-
         else:
 
             graph_input = {
@@ -204,22 +217,12 @@ def chat(
                     request.question
             }
 
-
-        # --------------------------------------------------
-        # Run LangGraph
-        # --------------------------------------------------
-
         result = (
             rag_app.invoke(
                 graph_input,
                 config=config,
             )
         )
-
-
-        # --------------------------------------------------
-        # Return API response
-        # --------------------------------------------------
 
         return ChatResponse(
             question=
@@ -254,7 +257,6 @@ def chat(
                     [],
                 ),
         )
-
 
     except Exception as error:
 
