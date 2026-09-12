@@ -1,61 +1,44 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    Field,
+)
 
-
-# --------------------------------------------------
-# Chat request
-# --------------------------------------------------
 
 class ChatRequest(BaseModel):
-    """
-    Request body sent to the RAG chat endpoint.
-    """
 
     question: str = Field(
         ...,
         min_length=1,
-        description="Question to ask the RAG assistant.",
     )
 
     thread_id: str = Field(
         ...,
         min_length=1,
-        description=(
-            "Conversation identifier used by "
-            "LangGraph checkpointing."
-        ),
     )
 
 
-# --------------------------------------------------
-# Source information
-# --------------------------------------------------
-
 class SourceInfo(BaseModel):
-    """
-    Metadata describing a source used
-    to generate the answer.
-    """
 
-    source: Optional[str] = None
+    source: Optional[
+        str
+    ] = None
 
-    file_type: Optional[str] = None
+    file_type: Optional[
+        str
+    ] = None
 
-    chunk_id: Optional[str] = None
+    chunk_id: Optional[
+        str
+    ] = None
 
-    page: Optional[str] = None
+    page: Optional[
+        str
+    ] = None
 
-
-# --------------------------------------------------
-# Chat response
-# --------------------------------------------------
 
 class ChatResponse(BaseModel):
-    """
-    Structured response returned by
-    the RAG chat endpoint.
-    """
 
     question: str
 
@@ -65,8 +48,84 @@ class ChatResponse(BaseModel):
 
     route: str
 
-    retrieval_relevant: Optional[bool] = None
+    retrieval_relevant: Optional[
+        bool
+    ] = None
 
-    standalone_question: Optional[str] = None
+    standalone_question: Optional[
+        str
+    ] = None
 
-    sources: list[SourceInfo] = []
+    sources: list[
+        SourceInfo
+    ] = Field(
+        default_factory=list
+    )
+
+
+class ConversationSummary(
+    BaseModel
+):
+
+    id: str
+
+    title: str
+
+    created_at: str
+
+    updated_at: str
+
+
+class ConversationMessage(
+    BaseModel
+):
+
+    id: str
+
+    role: str
+
+    content: str
+
+    sources: list[
+        SourceInfo
+    ] = Field(
+        default_factory=list
+    )
+
+    route: Optional[
+        str
+    ] = None
+
+    retrieval_relevant: Optional[
+        bool
+    ] = None
+
+    created_at: str
+
+
+class ConversationDetail(
+    ConversationSummary
+):
+
+    messages: list[
+        ConversationMessage
+    ] = Field(
+        default_factory=list
+    )
+
+
+class DocumentInfo(
+    BaseModel
+):
+
+    name: str
+
+    file_type: str
+
+    size: int
+
+    status: str
+
+    chunks: Optional[
+        int
+    ] = None
