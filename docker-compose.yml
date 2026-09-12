@@ -1,0 +1,57 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: rag-ai-backend-container
+
+    env_file:
+      - .env
+
+    environment:
+      CHROMA_PERSIST_DIRECTORY: /app/runtime/chroma_db
+      CONVERSATION_DATABASE: /app/runtime/conversation_history.sqlite
+      CHECKPOINT_DATABASE: /app/runtime/rag_checkpoints.sqlite
+      RAW_DATA_DIRECTORY: /app/data/raw
+      INGESTION_MANIFEST_PATH: /app/data/processed/ingestion_manifest.json
+
+    volumes:
+      - ./docker-data:/app/runtime
+      - ./data/raw:/app/data/raw
+      - ./data/processed:/app/data/processed
+
+    ports:
+      - "8000:8000"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://127.0.0.1:8000
+
+    container_name: rag-ai-frontend-container
+
+    ports:
+      - "3000:80"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    restart: unless-stopped

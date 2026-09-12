@@ -10,3 +10,6 @@ rag_checkpoints.sqlite*
 conversation_history.sqlite*
 
 data/processed/ingestion_manifest.json
+docker-data/
+
+data/raw/The Indian Himalayas.pdf
