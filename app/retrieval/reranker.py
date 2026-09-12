@@ -1,27 +1,48 @@
 from sentence_transformers import CrossEncoder
 
-
-MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+from app.config import RERANKER_MODEL
 
 
 def create_reranker():
-    """Create the local cross-encoder reranker."""
+    """
+    Create the cross-encoder reranker.
+    """
 
-    return CrossEncoder(MODEL_NAME)
+    return CrossEncoder(
+        RERANKER_MODEL
+    )
 
 
-def rerank_documents(query, documents, reranker):
-    """Rerank documents according to query-document relevance."""
+def rerank_documents(
+    query,
+    documents,
+    reranker,
+):
+    """
+    Rerank retrieved documents using
+    query-document cross-encoder scores.
+    """
+
+    if not documents:
+        return []
 
     pairs = [
-        (query, document.page_content)
+        (
+            query,
+            document.page_content,
+        )
         for document in documents
     ]
 
-    scores = reranker.predict(pairs)
+    scores = reranker.predict(
+        pairs
+    )
 
     ranked_documents = sorted(
-        zip(documents, scores),
+        zip(
+            documents,
+            scores,
+        ),
         key=lambda item: item[1],
         reverse=True,
     )
