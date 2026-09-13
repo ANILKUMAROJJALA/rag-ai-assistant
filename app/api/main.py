@@ -1,5 +1,6 @@
 import logging
 
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import (
@@ -39,10 +40,33 @@ from app.api.schemas import (
     DocumentInfo,
 )
 
+from app.config import (
+    CORS_ORIGINS,
+)
+
 
 logger = logging.getLogger(
     "uvicorn.error"
 )
+
+
+# --------------------------------------------------
+# Application lifespan
+# --------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Initialize application resources
+    when the FastAPI application starts.
+
+    Code before yield runs during startup.
+    Code after yield would run during shutdown.
+    """
+    initialize_history_database()
+
+    yield
 
 
 app = FastAPI(
@@ -52,18 +76,14 @@ app = FastAPI(
         "RAG AI Assistant."
     ),
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 
 app.add_middleware(
     CORSMiddleware,
 
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=CORS_ORIGINS,
 
     allow_credentials=True,
 
@@ -75,13 +95,6 @@ app.add_middleware(
         "*"
     ],
 )
-
-
-@app.on_event(
-    "startup"
-)
-def startup_event():
-    initialize_history_database()
 
 
 @lru_cache(maxsize=1)
