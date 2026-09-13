@@ -13,11 +13,10 @@ from app.config import (
 # Database configuration
 # ---------------------------------------------------------
 
-# Default database path comes from config.py.
+# Keep this module-level intentionally.
 #
-# DATABASE_PATH remains module-level intentionally because
-# our pytest fixtures monkeypatch it to a temporary SQLite
-# database for test isolation.
+# Our pytest fixtures monkeypatch DATABASE_PATH so every
+# test can use its own temporary SQLite database.
 DATABASE_PATH = Path(
     CONVERSATION_DATABASE
 )
@@ -99,14 +98,22 @@ def get_connection():
 
 def initialize_history_database():
     """
-    Create the application-level conversation
-    history tables.
+    Create and migrate the application-level
+    conversation-history database.
 
-    This database stores the conversations
-    and messages visible in the UI.
+    This database stores conversations and
+    messages visible in the UI.
 
     LangGraph checkpoint state is stored
     separately.
+
+    Supported database states:
+    - Fresh database
+    - Current database schema
+    - Legacy messages schema using:
+        * TEXT message IDs
+        * created_at
+        * sources_json
     """
 
     with get_connection() as connection:
@@ -128,6 +135,13 @@ def initialize_history_database():
 
         # -------------------------------------------------
         # Messages table
+        #
+        # For a brand-new database this creates the
+        # current schema.
+        #
+        # If an older messages table already exists,
+        # SQLite leaves that table unchanged here.
+        # We inspect and migrate it below.
         # -------------------------------------------------
 
         connection.execute(
@@ -151,7 +165,7 @@ def initialize_history_database():
         )
 
         # -------------------------------------------------
-        # Backward-compatible schema migration
+        # Inspect the existing messages schema
         # -------------------------------------------------
 
         columns = connection.execute(
@@ -164,6 +178,215 @@ def initialize_history_database():
             column["name"]
             for column in columns
         }
+
+        column_types = {
+            column["name"]:
+                (
+                    column["type"]
+                    or ""
+                ).upper()
+            for column in columns
+        }
+
+        # -------------------------------------------------
+        # Detect legacy schema
+        #
+        # Legacy:
+        #
+        # id TEXT
+        # created_at
+        # sources_json
+        #
+        # Current:
+        #
+        # id INTEGER AUTOINCREMENT
+        # timestamp
+        # sources
+        # -------------------------------------------------
+
+        needs_table_migration = (
+            column_types.get(
+                "id",
+                "",
+            )
+            != "INTEGER"
+            or "timestamp"
+            not in column_names
+            or "sources"
+            not in column_names
+        )
+
+        if needs_table_migration:
+
+            # ---------------------------------------------
+            # Resolve legacy timestamp column
+            # ---------------------------------------------
+
+            if "timestamp" in column_names:
+                timestamp_column = (
+                    "timestamp"
+                )
+
+            elif "created_at" in column_names:
+                timestamp_column = (
+                    "created_at"
+                )
+
+            else:
+                raise RuntimeError(
+                    "Cannot migrate messages table: "
+                    "no timestamp or created_at "
+                    "column was found."
+                )
+
+            # ---------------------------------------------
+            # Resolve legacy sources column
+            # ---------------------------------------------
+
+            if "sources" in column_names:
+                sources_column = (
+                    "sources"
+                )
+
+            elif "sources_json" in column_names:
+                sources_column = (
+                    "sources_json"
+                )
+
+            else:
+                sources_column = (
+                    "NULL"
+                )
+
+            # ---------------------------------------------
+            # Optional legacy columns
+            # ---------------------------------------------
+
+            if "route" in column_names:
+                route_column = (
+                    "route"
+                )
+            else:
+                route_column = (
+                    "NULL"
+                )
+
+            if (
+                "retrieval_relevant"
+                in column_names
+            ):
+                relevance_column = (
+                    "retrieval_relevant"
+                )
+            else:
+                relevance_column = (
+                    "NULL"
+                )
+
+            # ---------------------------------------------
+            # Create replacement table using
+            # the current schema
+            # ---------------------------------------------
+
+            connection.execute(
+                """
+                DROP TABLE IF EXISTS
+                messages_migrated
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE TABLE messages_migrated (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    sources TEXT,
+                    route TEXT,
+                    retrieval_relevant INTEGER,
+                    FOREIGN KEY (
+                        conversation_id
+                    )
+                    REFERENCES conversations(id)
+                    ON DELETE CASCADE
+                )
+                """
+            )
+
+            # ---------------------------------------------
+            # Copy old messages.
+            #
+            # Legacy message IDs are intentionally not
+            # copied because the new schema uses integer
+            # AUTOINCREMENT IDs.
+            #
+            # conversation_id remains unchanged, so every
+            # message stays connected to the same chat.
+            # ---------------------------------------------
+
+            migration_query = f"""
+                INSERT INTO messages_migrated (
+                    conversation_id,
+                    role,
+                    content,
+                    timestamp,
+                    sources,
+                    route,
+                    retrieval_relevant
+                )
+                SELECT
+                    conversation_id,
+                    role,
+                    content,
+                    {timestamp_column},
+                    {sources_column},
+                    {route_column},
+                    {relevance_column}
+                FROM messages
+                ORDER BY rowid ASC
+            """
+
+            connection.execute(
+                migration_query
+            )
+
+            # ---------------------------------------------
+            # Replace legacy table
+            # ---------------------------------------------
+
+            connection.execute(
+                """
+                DROP TABLE messages
+                """
+            )
+
+            connection.execute(
+                """
+                ALTER TABLE messages_migrated
+                RENAME TO messages
+                """
+            )
+
+        # -------------------------------------------------
+        # Re-read schema after possible migration
+        # -------------------------------------------------
+
+        columns = connection.execute(
+            """
+            PRAGMA table_info(messages)
+            """
+        ).fetchall()
+
+        column_names = {
+            column["name"]
+            for column in columns
+        }
+
+        # -------------------------------------------------
+        # Simple additive migrations
+        # -------------------------------------------------
 
         if "route" not in column_names:
 
@@ -224,13 +447,11 @@ def create_conversation(
     """
     Create a new conversation.
 
-    If a conversation ID is supplied,
-    it can also be reused as the LangGraph
-    thread_id.
+    A UUID is generated unless a specific
+    conversation ID is supplied.
     """
 
     if conversation_id is None:
-
         conversation_id = str(
             uuid.uuid4()
         )
@@ -255,7 +476,6 @@ def create_conversation(
         ).fetchone()
 
         if existing is not None:
-
             return dict(
                 existing
             )
@@ -294,15 +514,15 @@ def ensure_conversation(
     """
     Ensure that a conversation exists.
 
-    This keeps /chat backward compatible
-    with clients that provide a new
-    thread_id without first calling
+    This preserves backward compatibility with
+    clients that call POST /chat directly with a
+    newly generated thread_id without first calling
     POST /conversations.
     """
 
     with get_connection() as connection:
 
-        conversation = connection.execute(
+        existing = connection.execute(
             """
             SELECT
                 id,
@@ -317,22 +537,20 @@ def ensure_conversation(
             ),
         ).fetchone()
 
-    if conversation is not None:
-
+    if existing is not None:
         return dict(
-            conversation
+            existing
         )
 
     return create_conversation(
-        conversation_id=
-            conversation_id
+        conversation_id=conversation_id
     )
 
 
 def get_conversations():
     """
-    Return all conversations ordered
-    by most recent activity.
+    Return conversations ordered by most
+    recently active first.
     """
 
     with get_connection() as connection:
@@ -359,12 +577,11 @@ def get_conversation(
     conversation_id,
 ):
     """
-    Return one conversation together with
-    all of its visible messages.
+    Return one conversation and all of its
+    visible UI messages.
 
-    Database rows are mapped into the exact
-    shape expected by the FastAPI
-    ConversationDetail response model.
+    Returns None when the conversation
+    does not exist.
     """
 
     with get_connection() as connection:
@@ -385,10 +602,9 @@ def get_conversation(
         ).fetchone()
 
         if conversation is None:
-
             return None
 
-        message_rows = connection.execute(
+        raw_messages = connection.execute(
             """
             SELECT
                 id,
@@ -410,72 +626,78 @@ def get_conversation(
 
     messages = []
 
-    for row in message_rows:
+    for raw_message in raw_messages:
 
-        raw_message = dict(
-            row
+        # -------------------------------------------------
+        # Deserialize source metadata
+        # -------------------------------------------------
+
+        sources = []
+
+        serialized_sources = (
+            raw_message[
+                "sources"
+            ]
         )
 
-        # ---------------------------------------------
-        # Deserialize sources JSON
-        # ---------------------------------------------
-
-        raw_sources = raw_message.get(
-            "sources"
-        )
-
-        if raw_sources:
+        if serialized_sources:
 
             try:
-
-                sources = json.loads(
-                    raw_sources
+                loaded_sources = json.loads(
+                    serialized_sources
                 )
 
-            except json.JSONDecodeError:
+                if isinstance(
+                    loaded_sources,
+                    list,
+                ):
+                    sources = loaded_sources
 
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
                 sources = []
 
-        else:
+        # -------------------------------------------------
+        # Convert SQLite relevance representation
+        # -------------------------------------------------
 
-            sources = []
-
-        # ---------------------------------------------
-        # Convert SQLite relevance integer
-        # back into Python bool / None
-        # ---------------------------------------------
-
-        retrieval_relevant = (
-            raw_message.get(
+        raw_relevance = (
+            raw_message[
                 "retrieval_relevant"
-            )
+            ]
         )
 
-        if retrieval_relevant is not None:
-
+        if raw_relevance is None:
+            retrieval_relevant = None
+        else:
             retrieval_relevant = bool(
-                retrieval_relevant
+                raw_relevance
             )
 
-        # ---------------------------------------------
-        # Map database representation
-        # to API response representation
-        # ---------------------------------------------
+        # -------------------------------------------------
+        # Build API message shape
+        # -------------------------------------------------
 
         message = {
             "id": str(
                 raw_message["id"]
             ),
-            "role": raw_message[
-                "role"
-            ],
-            "content": raw_message[
-                "content"
-            ],
-            "sources": sources,
-            "route": raw_message.get(
-                "route"
-            ),
+            "role":
+                raw_message[
+                    "role"
+                ],
+            "content":
+                raw_message[
+                    "content"
+                ],
+            "sources":
+                sources,
+            "route":
+                raw_message[
+                    "route"
+                ],
             "retrieval_relevant":
                 retrieval_relevant,
             "created_at":
@@ -492,9 +714,9 @@ def get_conversation(
         conversation
     )
 
-    result[
-        "messages"
-    ] = messages
+    result["messages"] = (
+        messages
+    )
 
     return result
 
@@ -503,14 +725,14 @@ def delete_conversation(
     conversation_id,
 ):
     """
-    Delete a conversation.
+    Delete a conversation and all of its
+    visible UI messages.
 
-    Associated visible messages are removed
-    automatically because the foreign key
-    uses ON DELETE CASCADE.
+    SQLite ON DELETE CASCADE removes messages
+    belonging to the deleted conversation.
 
-    LangGraph checkpoint data is stored
-    separately.
+    LangGraph checkpoint state is stored
+    separately and is not modified here.
     """
 
     with get_connection() as connection:
@@ -527,7 +749,6 @@ def delete_conversation(
         ).fetchone()
 
         if existing is None:
-
             return False
 
         connection.execute(
@@ -559,40 +780,23 @@ def save_message(
     retrieval_relevant=None,
 ):
     """
-    Persist one visible conversation message.
+    Save one user or assistant message.
 
-    Parameters
-    ----------
-    conversation_id:
-        Conversation ID shared with the UI
-        and LangGraph thread when applicable.
+    Source metadata is stored as JSON.
 
-    role:
-        Usually "user" or "assistant".
-
-    content:
-        Visible message content.
-
-    sources:
-        RAG source metadata.
-
-    route:
-        LangGraph route used for the response,
-        for example "direct" or "rag".
-
-    retrieval_relevant:
-        Relevance-guard result.
-
-        True:
-            Retrieved context was relevant.
-
-        False:
-            Retrieved context was rejected.
-
-        None:
-            Relevance checking was not
-            applicable.
+    retrieval_relevant is stored using SQLite's
+    INTEGER representation:
+    True  -> 1
+    False -> 0
+    None  -> NULL
     """
+
+    # -------------------------------------------------
+    # Ensure parent conversation exists.
+    #
+    # This also preserves compatibility with clients
+    # that call /chat using a brand-new thread ID.
+    # -------------------------------------------------
 
     ensure_conversation(
         conversation_id
@@ -616,22 +820,17 @@ def save_message(
         )
 
     # -------------------------------------------------
-    # Convert Python boolean to SQLite integer
+    # Convert relevance value for SQLite
     # -------------------------------------------------
 
-    serialized_relevance = None
-
-    if retrieval_relevant is not None:
-
+    if retrieval_relevant is None:
+        serialized_relevance = None
+    else:
         serialized_relevance = int(
             bool(
                 retrieval_relevant
             )
         )
-
-    # -------------------------------------------------
-    # Save message
-    # -------------------------------------------------
 
     with get_connection() as connection:
 
@@ -659,8 +858,10 @@ def save_message(
             ),
         )
 
-        # Move recently-active conversations
+        # -------------------------------------------------
+        # Move recently active conversations
         # to the top of the sidebar.
+        # -------------------------------------------------
 
         connection.execute(
             """
@@ -680,7 +881,6 @@ def save_message(
             cursor.lastrowid
         )
 
-    # Return using API-friendly representation.
     return {
         "id": str(
             message_id
@@ -688,7 +888,9 @@ def save_message(
         "role": role,
         "content": content,
         "sources":
-            sources or [],
+            sources
+            if sources is not None
+            else [],
         "route": route,
         "retrieval_relevant":
             retrieval_relevant,
@@ -707,32 +909,34 @@ def maybe_create_title(
     user_message,
 ):
     """
-    Create a lightweight conversation title
-    from the first user message.
+    Create a lightweight title from the first
+    user message.
 
-    This avoids making an extra LLM request
-    only for sidebar title generation.
+    No additional LLM call is required.
+
+    Existing custom/generated titles are left
+    unchanged.
     """
 
-    if not user_message:
-
+    if user_message is None:
         return None
 
     cleaned_message = " ".join(
         str(
             user_message
         ).split()
-    )
+    ).strip()
 
     if not cleaned_message:
-
         return None
 
     with get_connection() as connection:
 
         conversation = connection.execute(
             """
-            SELECT title
+            SELECT
+                id,
+                title
             FROM conversations
             WHERE id = ?
             """,
@@ -742,7 +946,6 @@ def maybe_create_title(
         ).fetchone()
 
         if conversation is None:
-
             return None
 
         current_title = (
@@ -751,34 +954,32 @@ def maybe_create_title(
             ]
         )
 
-        # Only replace placeholder titles.
-
-        if current_title not in (
-            "",
-            "New chat",
-            "New Chat",
-            "Untitled",
-        ):
-
+        # Only automatically title a conversation
+        # that still has the default title.
+        if current_title != "New chat":
             return current_title
+
+        # -------------------------------------------------
+        # Create compact sidebar title
+        # -------------------------------------------------
 
         max_length = 46
 
         if len(
             cleaned_message
-        ) > max_length:
+        ) <= max_length:
+
+            new_title = (
+                cleaned_message
+            )
+
+        else:
 
             new_title = (
                 cleaned_message[
                     :max_length
                 ].rstrip()
                 + "..."
-            )
-
-        else:
-
-            new_title = (
-                cleaned_message
             )
 
         timestamp = utc_now()

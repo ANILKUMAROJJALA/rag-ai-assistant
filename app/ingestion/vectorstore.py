@@ -1,7 +1,12 @@
-from langchain_chroma import Chroma
+from functools import lru_cache
 
-from app.ingestion.loader import (
-    load_documents_from_folder,
+from langchain_chroma import (
+    Chroma,
+)
+
+from app.config import (
+    CHROMA_COLLECTION_NAME,
+    CHROMA_PERSIST_DIRECTORY,
 )
 
 from app.ingestion.chunking import (
@@ -12,39 +17,45 @@ from app.ingestion.embeddings import (
     create_embedding_model,
 )
 
+from app.ingestion.loader import (
+    load_documents_from_folder,
+)
 
-PERSIST_DIRECTORY = "chroma_db"
-COLLECTION_NAME = "technova_documents"
 
-
+@lru_cache(maxsize=1)
 def create_vector_store():
     """
-    Create or open the persistent Chroma collection.
+    Create or open the configured persistent
+    Chroma collection.
+
+    The vector store is cached so the backend
+    reuses the same Chroma connection.
     """
 
-    embeddings = (
-        create_embedding_model()
+    return Chroma(
+        collection_name=(
+            CHROMA_COLLECTION_NAME
+        ),
+        persist_directory=(
+            CHROMA_PERSIST_DIRECTORY
+        ),
+        embedding_function=(
+            create_embedding_model()
+        ),
     )
-
-    vector_store = Chroma(
-        collection_name=
-            COLLECTION_NAME,
-
-        persist_directory=
-            PERSIST_DIRECTORY,
-
-        embedding_function=
-            embeddings,
-    )
-
-    return vector_store
 
 
 def ingest_documents():
     """
-    Load documents, split them into chunks,
-    and upsert them into Chroma using
-    deterministic chunk IDs.
+    Development/demo helper.
+
+    Load all supported documents from the
+    configured demo folder structure used
+    during development and add their chunks
+    to Chroma.
+
+    The production upload API does not depend
+    on this function.
     """
 
     print(
@@ -61,15 +72,11 @@ def ingest_documents():
         documents
     )
 
-
     if not chunks:
-
         print(
             "No chunks found."
         )
-
         return
-
 
     ids = [
         chunk.metadata[
@@ -78,29 +85,22 @@ def ingest_documents():
         for chunk in chunks
     ]
 
-
     vector_store = (
         create_vector_store()
     )
-
-
-    # --------------------------------------------------
-    # Upsert instead of blind insertion
-    # --------------------------------------------------
 
     vector_store.add_documents(
         documents=chunks,
         ids=ids,
     )
 
-
     stored = (
         vector_store.get()
     )
 
-
     print(
-        "\nVector store updated successfully!"
+        "\nVector store updated "
+        "successfully!"
     )
 
     print(
@@ -110,10 +110,11 @@ def ingest_documents():
 
     print(
         "Total records stored:",
-        len(stored["ids"]),
+        len(
+            stored["ids"]
+        ),
     )
 
 
 if __name__ == "__main__":
-
     ingest_documents()

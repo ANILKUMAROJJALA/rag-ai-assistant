@@ -30,6 +30,10 @@ def load_document(file_path: str):
     - .txt
     - .pdf
     - .docx
+
+    Metadata is normalized so the rest of the
+    application receives a consistent source name,
+    file type, and human-readable page label.
     """
 
     path = Path(file_path)
@@ -40,6 +44,12 @@ def load_document(file_path: str):
         )
 
     extension = path.suffix.lower()
+
+    if extension not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported file type: {extension}. "
+            f"Supported types: {SUPPORTED_EXTENSIONS}"
+        )
 
     if extension == ".txt":
         loader = TextLoader(
@@ -52,25 +62,53 @@ def load_document(file_path: str):
             str(path)
         )
 
-    elif extension == ".docx":
+    else:
         loader = Docx2txtLoader(
             str(path)
         )
 
-    else:
-        raise ValueError(
-            f"Unsupported file type: {extension}. "
-            f"Supported types: {SUPPORTED_EXTENSIONS}"
-        )
-
     documents = loader.load()
 
-    # Add our own consistent metadata
+    # -----------------------------------------------------
+    # Normalize metadata
+    # -----------------------------------------------------
+
     for document in documents:
-        document.metadata["source"] = path.name
-        document.metadata["file_type"] = (
-            extension.replace(".", "")
+
+        document.metadata[
+            "source"
+        ] = path.name
+
+        document.metadata[
+            "file_type"
+        ] = extension.replace(
+            ".",
+            "",
         )
+
+        # PyPDFLoader normally uses a zero-based
+        # "page" value. page_label is what we want
+        # to display to the user.
+        if (
+            document.metadata.get(
+                "page_label"
+            )
+            is None
+            and document.metadata.get(
+                "page"
+            )
+            is not None
+        ):
+            document.metadata[
+                "page_label"
+            ] = str(
+                int(
+                    document.metadata[
+                        "page"
+                    ]
+                )
+                + 1
+            )
 
     return documents
 
@@ -79,12 +117,19 @@ def load_document(file_path: str):
 # Load All Documents From Folder
 # ---------------------------------------------------------
 
-def load_documents_from_folder(folder_path: str):
+def load_documents_from_folder(
+    folder_path: str,
+):
     """
     Load all supported documents from a folder.
+
+    This helper remains available for development,
+    demos, and backward compatibility.
     """
 
-    folder = Path(folder_path)
+    folder = Path(
+        folder_path
+    )
 
     if not folder.exists():
         raise FileNotFoundError(
@@ -103,57 +148,76 @@ def load_documents_from_folder(folder_path: str):
             not in SUPPORTED_EXTENSIONS
         ):
             print(
-                f"Skipping unsupported file: "
+                "Skipping unsupported file: "
                 f"{file_path.name}"
             )
             continue
 
-        print(f"Loading: {file_path.name}")
+        print(
+            f"Loading: {file_path.name}"
+        )
 
         documents = load_document(
             str(file_path)
         )
 
-        all_documents.extend(documents)
+        all_documents.extend(
+            documents
+        )
 
     return all_documents
 
 
 # ---------------------------------------------------------
-# Test
+# Manual Development Test
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
 
-    documents = load_documents_from_folder(
-        "data/raw"
+    documents = (
+        load_documents_from_folder(
+            "data/raw"
+        )
     )
 
     print(
-        f"\nTotal loaded document units: "
+        "\nTotal loaded document units: "
         f"{len(documents)}"
     )
 
-    for i, document in enumerate(documents):
+    for i, document in enumerate(
+        documents
+    ):
 
-        print(f"\n--- Document {i + 1} ---")
-
-        print("Source:")
         print(
-            document.metadata.get("source")
+            f"\n--- Document {i + 1} ---"
         )
 
-        print("File type:")
         print(
-            document.metadata.get("file_type")
+            "Source:",
+            document.metadata.get(
+                "source"
+            ),
         )
 
-        print("Page:")
         print(
-            document.metadata.get("page")
+            "File type:",
+            document.metadata.get(
+                "file_type"
+            ),
         )
 
-        print("Preview:")
         print(
-            document.page_content[:200]
+            "Page:",
+            document.metadata.get(
+                "page_label",
+                document.metadata.get(
+                    "page"
+                ),
+            ),
+        )
+
+        print(
+            "Preview:",
+            document.page_content[:200],
         )

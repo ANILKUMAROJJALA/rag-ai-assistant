@@ -1,215 +1,31 @@
-import hashlib
-
-from functools import lru_cache
 from pathlib import Path
 
-from langchain_chroma import Chroma
-
-from langchain_community.document_loaders import (
-    Docx2txtLoader,
-    PyPDFLoader,
-    TextLoader,
+from app.ingestion.chunking import (
+    split_documents,
 )
 
-from langchain_huggingface import (
-    HuggingFaceEmbeddings,
+from app.ingestion.loader import (
+    SUPPORTED_EXTENSIONS,
+    load_document,
 )
 
-from langchain_text_splitters import (
-    RecursiveCharacterTextSplitter,
+from app.ingestion.vectorstore import (
+    create_vector_store,
 )
-
-from app.config import (
-    CHROMA_COLLECTION_NAME,
-    CHROMA_PERSIST_DIRECTORY,
-    CHUNK_OVERLAP,
-    CHUNK_SIZE,
-    EMBEDDING_MODEL,
-)
-
-
-SUPPORTED_EXTENSIONS = {
-    ".txt",
-    ".pdf",
-    ".docx",
-}
-
-
-@lru_cache(maxsize=1)
-def get_live_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL
-    )
-
-
-@lru_cache(maxsize=1)
-def get_live_vector_store():
-    return Chroma(
-        collection_name=(
-            CHROMA_COLLECTION_NAME
-        ),
-        persist_directory=(
-            CHROMA_PERSIST_DIRECTORY
-        ),
-        embedding_function=(
-            get_live_embeddings()
-        ),
-    )
-
-
-def load_uploaded_document(
-    file_path: Path,
-):
-    extension = (
-        file_path.suffix.lower()
-    )
-
-    if extension == ".txt":
-
-        loader = TextLoader(
-            str(file_path),
-            encoding="utf-8",
-        )
-
-    elif extension == ".pdf":
-
-        loader = PyPDFLoader(
-            str(file_path)
-        )
-
-    elif extension == ".docx":
-
-        loader = Docx2txtLoader(
-            str(file_path)
-        )
-
-    else:
-        raise ValueError(
-            (
-                "Unsupported file type. "
-                "Only TXT, PDF, and DOCX "
-                "are supported."
-            )
-        )
-
-    documents = loader.load()
-
-    source_name = (
-        file_path.name
-    )
-
-    file_type = (
-        extension.replace(
-            ".",
-            "",
-        )
-    )
-
-    for document in documents:
-
-        document.metadata[
-            "source"
-        ] = source_name
-
-        document.metadata[
-            "file_type"
-        ] = file_type
-
-        if (
-            document.metadata.get(
-                "page_label"
-            )
-            is None
-            and document.metadata.get(
-                "page"
-            )
-            is not None
-        ):
-            document.metadata[
-                "page_label"
-            ] = str(
-                int(
-                    document.metadata[
-                        "page"
-                    ]
-                )
-                + 1
-            )
-
-    return documents
-
-
-def create_stable_chunk_id(
-    document,
-):
-    source = (
-        document.metadata.get(
-            "source",
-            "",
-        )
-    )
-
-    page = (
-        document.metadata.get(
-            "page_label",
-            document.metadata.get(
-                "page",
-                "",
-            ),
-        )
-    )
-
-    raw_value = (
-        f"{source}|"
-        f"{page}|"
-        f"{document.page_content}"
-    )
-
-    return hashlib.sha256(
-        raw_value.encode(
-            "utf-8"
-        )
-    ).hexdigest()
-
-
-def chunk_uploaded_documents(
-    documents,
-):
-    splitter = (
-        RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=(
-                CHUNK_OVERLAP
-            ),
-        )
-    )
-
-    chunks = (
-        splitter.split_documents(
-            documents
-        )
-    )
-
-    for chunk in chunks:
-
-        chunk_id = (
-            create_stable_chunk_id(
-                chunk
-            )
-        )
-
-        chunk.metadata[
-            "chunk_id"
-        ] = chunk_id
-
-    return chunks
 
 
 def delete_source_from_chroma(
     source_name: str,
 ):
+    """
+    Delete all vector chunks belonging
+    to one source document.
+
+    Returns the number of deleted chunks.
+    """
+
     vector_store = (
-        get_live_vector_store()
+        create_vector_store()
     )
 
     result = vector_store.get(
@@ -223,10 +39,12 @@ def delete_source_from_chroma(
         [],
     )
 
-    if ids:
-        vector_store.delete(
-            ids=ids
-        )
+    if not ids:
+        return 0
+
+    vector_store.delete(
+        ids=ids
+    )
 
     return len(ids)
 
@@ -234,45 +52,76 @@ def delete_source_from_chroma(
 def index_file(
     file_path: Path,
 ):
-    if (
+    """
+    Load, chunk, and index one document.
+
+    This is the production ingestion path
+    used by the document-upload API.
+    """
+
+    file_path = Path(
+        file_path
+    )
+
+    if not file_path.exists():
+        raise FileNotFoundError(
+            f"File not found: {file_path}"
+        )
+
+    extension = (
         file_path.suffix.lower()
+    )
+
+    if (
+        extension
         not in SUPPORTED_EXTENSIONS
     ):
         raise ValueError(
-            "Unsupported file type."
+            "Unsupported file type. "
+            "Only TXT, PDF, and DOCX "
+            "are supported."
         )
 
-    documents = (
-        load_uploaded_document(
-            file_path
-        )
+    # -----------------------------------------------------
+    # Load
+    # -----------------------------------------------------
+
+    documents = load_document(
+        str(file_path)
     )
 
-    chunks = (
-        chunk_uploaded_documents(
-            documents
-        )
+    # -----------------------------------------------------
+    # Chunk + deterministic IDs
+    # -----------------------------------------------------
+
+    chunks = split_documents(
+        documents
     )
 
     if not chunks:
         raise ValueError(
-            (
-                "The uploaded document "
-                "did not contain readable "
-                "text."
-            )
+            "The uploaded document "
+            "did not contain readable text."
         )
 
     source_name = (
         file_path.name
     )
 
+    # -----------------------------------------------------
+    # Remove stale vectors for this source
+    # -----------------------------------------------------
+
     delete_source_from_chroma(
         source_name
     )
 
+    # -----------------------------------------------------
+    # Store new chunks
+    # -----------------------------------------------------
+
     vector_store = (
-        get_live_vector_store()
+        create_vector_store()
     )
 
     ids = [
@@ -288,9 +137,6 @@ def index_file(
     )
 
     return {
-        "source":
-            source_name,
-
-        "chunks":
-            len(chunks),
+        "source": source_name,
+        "chunks": len(chunks),
     }
