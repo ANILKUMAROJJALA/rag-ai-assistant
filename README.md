@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://frontend-production-eeb4.up.railway.app"><strong>🚀 Live Demo</strong></a>
+  <a href="https://anil-rag-assistant.up.railway.app"><strong>🚀 Live Demo</strong></a>
   &nbsp;•&nbsp;
   <a href="#system-architecture">Architecture</a>
   &nbsp;•&nbsp;
@@ -32,7 +32,7 @@
 
 The complete application is deployed on Railway:
 
-### 👉 [Launch RAG AI Assistant](https://frontend-production-eeb4.up.railway.app)
+### 👉 [Launch RAG AI Assistant](https://anil-rag-assistant.up.railway.app)
 
 The deployed application supports document ingestion, conversational question answering, persistent chat history, source attribution, and persistent vector storage.
 
