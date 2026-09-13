@@ -71,10 +71,7 @@ RAW_DATA_DIRECTORY = os.getenv(
     "data/raw",
 )
 
-INGESTION_MANIFEST_PATH = os.getenv(
-    "INGESTION_MANIFEST_PATH",
-    "data/processed/ingestion_manifest.json",
-)
+
 
 
 # ---------------------------------------------------------

@@ -14,12 +14,10 @@ services:
       CONVERSATION_DATABASE: /app/runtime/conversation_history.sqlite
       CHECKPOINT_DATABASE: /app/runtime/rag_checkpoints.sqlite
       RAW_DATA_DIRECTORY: /app/data/raw
-      INGESTION_MANIFEST_PATH: /app/data/processed/ingestion_manifest.json
 
     volumes:
       - ./docker-data:/app/runtime
       - ./data/raw:/app/data/raw
-      - ./data/processed:/app/data/processed
 
     ports:
       - "8000:8000"
